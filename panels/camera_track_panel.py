@@ -10,7 +10,7 @@ import lichtfeld as lf
 from lfs_plugins.types import Panel
 
 from ..core.camera_track import CameraTrack, compute_camera_position
-from ..core.recorder import RecordingSettings, get_default_output_path, record_circular_video, preview_camera_position
+from ..core.recorder import RecordingSettings, get_default_output_path, record_circular_video, record_frames_to_folder
 from ..operators.poi_picker import set_poi_callback, clear_poi_callback, was_poi_cancelled
 
 
@@ -21,6 +21,8 @@ _track_state = {
     'elevation': 1.5,
     'radius': 5.0,
     'starting_angle': 0.0,
+    'orbit_axis': 'z',  # 'z', 'x', or 'y'
+    'invert_direction': False,
     'show_preview': True,
 }
 
@@ -44,6 +46,7 @@ def _camera_track_draw_handler(ctx):
     elevation = _track_state['elevation']
     radius = _track_state['radius']
     starting_angle = _track_state['starting_angle']
+    orbit_axis = _track_state['orbit_axis']
     
     # Draw the POI marker (red sphere)
     ctx.draw_point_3d(poi, (1.0, 0.2, 0.2, 1.0), 25.0)
@@ -57,25 +60,37 @@ def _camera_track_draw_handler(ctx):
             (1.0, 0.8, 0.2, 1.0)
         )
     
+    invert = _track_state['invert_direction']
+    
+    # Compute track center based on orbit axis (with inversion)
+    offset = -elevation if invert else elevation
+    if orbit_axis == "z":
+        track_center = (poi[0], poi[1], poi[2] + offset)
+    elif orbit_axis == "x":
+        track_center = (poi[0] + offset, poi[1], poi[2])
+    elif orbit_axis == "y":
+        track_center = (poi[0], poi[1] + offset, poi[2])
+    else:
+        track_center = (poi[0], poi[1], poi[2] + offset)
+    
     # Draw the circular track
-    track_center = (poi[0], poi[1], poi[2] + elevation)
     num_segments = 64
     track_color = (0.2, 0.8, 1.0, 0.8)
     
     prev_point = None
     for i in range(num_segments + 1):
         angle = (i / num_segments) * 360.0
-        pos = compute_camera_position(poi, elevation, radius, angle)
+        pos = compute_camera_position(poi, elevation, radius, angle, orbit_axis, invert)
         
         if prev_point is not None:
             ctx.draw_line_3d(prev_point, pos, track_color, 2.0)
         prev_point = pos
     
-    # Draw vertical line from POI to track center
+    # Draw line from POI to track center (offset indicator)
     ctx.draw_line_3d(poi, track_center, (0.5, 0.5, 0.5, 0.5), 1.0)
     
     # Draw starting point marker (green)
-    start_pos = compute_camera_position(poi, elevation, radius, starting_angle)
+    start_pos = compute_camera_position(poi, elevation, radius, starting_angle, orbit_axis, invert)
     ctx.draw_point_3d(start_pos, (0.2, 1.0, 0.2, 1.0), 20.0)
     
     screen_start = ctx.world_to_screen(start_pos)
@@ -90,7 +105,7 @@ def _camera_track_draw_handler(ctx):
     ctx.draw_line_3d(start_pos, poi, (0.2, 1.0, 0.2, 0.5), 1.5)
     
     # Draw radius indicator
-    radius_end = compute_camera_position(poi, elevation, radius, starting_angle + 90)
+    radius_end = compute_camera_position(poi, elevation, radius, starting_angle + 90, orbit_axis, invert)
     ctx.draw_line_3d(track_center, radius_end, (1.0, 1.0, 0.2, 0.5), 1.0)
 
 
@@ -132,12 +147,16 @@ class CameraTrackPanel(Panel):
         self._radius = 5.0
         self._speed = 30.0  # seconds per circle
         self._starting_angle = 0.0
+        self._orbit_axis_idx = 0  # 0=Z, 1=X, 2=Y
+        self._invert_direction = False
         
         # Recording settings
         self._resolution_idx = 0
         self._fps = 30.0
         self._quality = 85
+        self._fov = 60.0
         self._output_path = ""
+        self._export_frames = False  # Export as frames instead of video
         
         # Preview
         self._show_preview = True
@@ -195,17 +214,27 @@ class CameraTrackPanel(Panel):
         self._status_is_error = False
         lf.ui.request_redraw()
     
+    ORBIT_AXIS_ITEMS = [
+        ("z", "Z-Axis (Horizontal)"),
+        ("x", "X-Axis (Vertical YZ)"),
+        ("y", "Y-Axis (Vertical XZ)"),
+    ]
+    
     def _get_track(self) -> Optional[CameraTrack]:
         """Get the current camera track configuration."""
         if self._poi is None:
             return None
+        
+        orbit_axis = self.ORBIT_AXIS_ITEMS[self._orbit_axis_idx][0]
         
         return CameraTrack(
             poi=self._poi,
             elevation=self._elevation,
             radius=self._radius,
             speed=self._speed,
-            starting_angle=self._starting_angle
+            starting_angle=self._starting_angle,
+            orbit_axis=orbit_axis,
+            invert_direction=self._invert_direction
         )
     
     def _get_recording_settings(self) -> RecordingSettings:
@@ -220,7 +249,8 @@ class CameraTrackPanel(Panel):
             output_path=self._output_path,
             resolution=resolution,
             fps=self._fps,
-            quality=self._quality
+            quality=self._quality,
+            fov=self._fov
         )
     
     def _on_record_progress(self, progress: float, message: str):
@@ -242,9 +272,14 @@ class CameraTrackPanel(Panel):
         self._recording = True
         self._record_progress = 0.0
         
-        # Run recording (this will block the UI - in a real implementation,
-        # this should be done in a background thread with proper synchronization)
-        success, msg = record_circular_video(track, settings, self._on_record_progress)
+        if self._export_frames:
+            # Export as individual frames
+            import os
+            folder = os.path.splitext(self._output_path)[0] + "_frames"
+            success, msg = record_frames_to_folder(track, settings, folder, self._on_record_progress)
+        else:
+            # Export as video
+            success, msg = record_circular_video(track, settings, self._on_record_progress)
         
         self._recording = False
         self._status_msg = msg
@@ -262,7 +297,9 @@ class CameraTrackPanel(Panel):
             elevation=track.elevation,
             radius=track.radius,
             speed=track.speed,
-            starting_angle=angle
+            starting_angle=angle,
+            orbit_axis=track.orbit_axis,
+            invert_direction=track.invert_direction
         )
         
         preview_camera_position(preview_track, angle)
@@ -288,6 +325,8 @@ class CameraTrackPanel(Panel):
         _track_state['elevation'] = self._elevation
         _track_state['radius'] = self._radius
         _track_state['starting_angle'] = self._starting_angle
+        _track_state['orbit_axis'] = self.ORBIT_AXIS_ITEMS[self._orbit_axis_idx][0]
+        _track_state['invert_direction'] = self._invert_direction
         _track_state['show_preview'] = self._show_preview
         
         # === Point of Interest Section ===
@@ -317,13 +356,23 @@ class CameraTrackPanel(Panel):
         settings_changed = False
         
         if layout.collapsing_header("Track Settings", default_open=True):
-            # Elevation
-            layout.label("Elevation (height above POI):")
-            layout.push_item_width(-1)
+            # Elevation/Offset
+            axis_name = self.ORBIT_AXIS_ITEMS[self._orbit_axis_idx][0].upper()
+            layout.label(f"Offset along {axis_name}-axis:")
+            
+            # Slider + manual input
+            layout.push_item_width(-80 * scale)
             changed, self._elevation = layout.slider_float(
-                "##elevation", self._elevation, 0.0, 20.0, "%.2f units"
+                "##elevation_slider", self._elevation, 0.0, 50.0
             )
             settings_changed |= changed
+            layout.pop_item_width()
+            layout.same_line()
+            layout.push_item_width(70 * scale)
+            changed, self._elevation = layout.input_float("##elevation_input", self._elevation, 0.0, 0.0)
+            if changed:
+                self._elevation = max(0.0, self._elevation)
+                settings_changed = True
             layout.pop_item_width()
             
             # Fine adjustment buttons for elevation
@@ -348,11 +397,20 @@ class CameraTrackPanel(Panel):
             
             # Radius
             layout.label("Radius (distance from POI):")
-            layout.push_item_width(-1)
+            
+            # Slider + manual input (slider up to 200, input unlimited)
+            layout.push_item_width(-80 * scale)
             changed, self._radius = layout.slider_float(
-                "##radius", self._radius, 0.5, 50.0, "%.2f units"
+                "##radius_slider", self._radius, 0.5, 200.0
             )
             settings_changed |= changed
+            layout.pop_item_width()
+            layout.same_line()
+            layout.push_item_width(70 * scale)
+            changed, self._radius = layout.input_float("##radius_input", self._radius, 0.0, 0.0)
+            if changed:
+                self._radius = max(0.5, self._radius)
+                settings_changed = True
             layout.pop_item_width()
             
             # Fine adjustment buttons for radius
@@ -364,24 +422,50 @@ class CameraTrackPanel(Panel):
                 self._radius += 1.0
                 settings_changed = True
             layout.same_line()
-            if layout.button("-0.1##radsub01", (btn_w, 0)):
-                self._radius = max(0.5, self._radius - 0.1)
+            if layout.button("-10##radsub10", (btn_w, 0)):
+                self._radius = max(0.5, self._radius - 10.0)
                 settings_changed = True
             layout.same_line()
-            if layout.button("+0.1##radadd01", (btn_w, 0)):
-                self._radius += 0.1
+            if layout.button("+10##radadd10", (btn_w, 0)):
+                self._radius += 10.0
                 settings_changed = True
             
             layout.spacing()
             
             # Speed
             layout.label("Speed (seconds per full circle):")
-            layout.push_item_width(-1)
+            
+            # Slider + manual input (slider up to 120, input unlimited)
+            layout.push_item_width(-80 * scale)
             changed, self._speed = layout.slider_float(
-                "##speed", self._speed, 5.0, 120.0, "%.1f sec"
+                "##speed_slider", self._speed, 5.0, 120.0
             )
             settings_changed |= changed
             layout.pop_item_width()
+            layout.same_line()
+            layout.push_item_width(70 * scale)
+            changed, self._speed = layout.input_float("##speed_input", self._speed, 0.0, 0.0)
+            if changed:
+                self._speed = max(1.0, self._speed)  # Minimum 1 second
+                settings_changed = True
+            layout.pop_item_width()
+            
+            # Fine adjustment buttons for speed
+            if layout.button("-10##speedsub10", (btn_w, 0)):
+                self._speed = max(1.0, self._speed - 10.0)
+                settings_changed = True
+            layout.same_line()
+            if layout.button("+10##speedadd10", (btn_w, 0)):
+                self._speed += 10.0
+                settings_changed = True
+            layout.same_line()
+            if layout.button("-60##speedsub60", (btn_w, 0)):
+                self._speed = max(1.0, self._speed - 60.0)
+                settings_changed = True
+            layout.same_line()
+            if layout.button("+60##speedadd60", (btn_w, 0)):
+                self._speed += 60.0
+                settings_changed = True
             
             layout.spacing()
             
@@ -389,7 +473,7 @@ class CameraTrackPanel(Panel):
             layout.label("Starting Angle:")
             layout.push_item_width(-1)
             changed, self._starting_angle = layout.slider_float(
-                "##startangle", self._starting_angle, 0.0, 360.0, "%.1f°"
+                "##startangle", self._starting_angle, 0.0, 360.0
             )
             settings_changed |= changed
             layout.pop_item_width()
@@ -410,6 +494,26 @@ class CameraTrackPanel(Panel):
             if layout.button("270°##ang270", (btn_w, 0)):
                 self._starting_angle = 270.0
                 settings_changed = True
+            
+            layout.spacing()
+            
+            # Orbit Axis
+            layout.label("Orbit Axis:")
+            axis_labels = [item[1] for item in self.ORBIT_AXIS_ITEMS]
+            changed, self._orbit_axis_idx = layout.combo("##orbitaxis", self._orbit_axis_idx, axis_labels)
+            settings_changed |= changed
+            if layout.is_item_hovered():
+                layout.set_tooltip(
+                    "Z-Axis: Camera orbits horizontally around the model\n"
+                    "X-Axis: Camera orbits vertically in YZ plane\n"
+                    "Y-Axis: Camera orbits vertically in XZ plane"
+                )
+            
+            # Invert direction checkbox
+            changed, self._invert_direction = layout.checkbox("Invert Direction##invertdir", self._invert_direction)
+            settings_changed |= changed
+            if layout.is_item_hovered():
+                layout.set_tooltip("Flip the offset direction (e.g., orbit below instead of above)")
         
         layout.separator()
         
@@ -419,20 +523,12 @@ class CameraTrackPanel(Panel):
             if changed:
                 lf.ui.request_redraw()
             
-            if self._poi is not None:
-                layout.spacing()
-                layout.label("Preview camera position:")
-                layout.push_item_width(-1)
-                changed, self._preview_angle = layout.slider_float(
-                    "##previewangle", self._preview_angle, 0.0, 360.0, "%.1f°"
-                )
-                layout.pop_item_width()
-                
-                if layout.button("Go to Preview Position##gotoprev", (-1, 28 * scale)):
-                    self._preview_at_angle(self._preview_angle)
-                
-                if layout.button("Go to Start Position##gotostart", (-1, 0)):
-                    self._preview_at_angle(self._starting_angle)
+            # Note: Camera position preview requires API not yet available
+            # The track visualization in viewport shows the planned path
+            layout.text_colored(
+                "Track visualization shown in viewport",
+                theme.palette.text_dim
+            )
         
         layout.separator()
         
@@ -444,14 +540,16 @@ class CameraTrackPanel(Panel):
             
             # FPS
             layout.push_item_width(100 * scale)
-            changed, self._fps = layout.input_float("FPS##fps", self._fps, 0.0, 0.0, "%.0f")
+            changed, self._fps = layout.input_float("FPS##fps", self._fps, 0.0, 0.0)
             self._fps = max(1.0, min(120.0, self._fps))
             layout.pop_item_width()
             
-            # Quality
+            # FOV
             layout.push_item_width(100 * scale)
-            changed, self._quality = layout.slider_int("Quality##qual", self._quality, 10, 100)
+            changed, self._fov = layout.slider_float("FOV##fov", self._fov, 30.0, 120.0)
             layout.pop_item_width()
+            if layout.is_item_hovered():
+                layout.set_tooltip("Field of view in degrees")
             
             layout.spacing()
             
@@ -468,6 +566,11 @@ class CameraTrackPanel(Panel):
                 # TODO: Open file browser dialog
                 pass
             
+            # Export as frames option
+            changed, self._export_frames = layout.checkbox("Export as PNG frames##exportframes", self._export_frames)
+            if layout.is_item_hovered():
+                layout.set_tooltip("Export individual PNG frames instead of MP4 video")
+            
             # Display estimated file info
             track = self._get_track()
             if track:
@@ -482,8 +585,8 @@ class CameraTrackPanel(Panel):
         
         # === Record Button ===
         if self._recording:
-            # Show progress
-            layout.progress_bar(self._record_progress, (-1, 28 * scale), f"{self._record_progress * 100:.0f}%")
+            # Show progress - progress_bar(fraction, overlay, width, height)
+            layout.progress_bar(self._record_progress, f"{self._record_progress * 100:.0f}%", -1, 28 * scale)
         else:
             can_record = self._poi is not None and not self._picking_poi
             
@@ -491,11 +594,12 @@ class CameraTrackPanel(Panel):
                 layout.text_colored("Set a Point of Interest to enable recording", theme.palette.text_dim)
             
             # Record button
+            button_label = "EXPORT FRAMES" if self._export_frames else "RECORD VIDEO"
             if can_record:
-                if layout.button_styled("RECORD CIRCULAR VIDEO##record", "primary", (-1, 40 * scale)):
+                if layout.button_styled(f"{button_label}##record", "primary", (-1, 40 * scale)):
                     self._start_recording()
             else:
-                layout.button("RECORD CIRCULAR VIDEO##record_disabled", (-1, 40 * scale))
+                layout.button(f"{button_label}##record_disabled", (-1, 40 * scale))
         
         # Status message
         if self._status_msg:

@@ -14,16 +14,19 @@ class CameraTrack:
     
     Attributes:
         poi: Point of interest (x, y, z) - the center point the camera looks at
-        elevation: Height above the POI for the camera track (in scene units)
+        elevation: Offset from POI along the orbit axis (in scene units)
         radius: Radius of the circular track (in scene units)
         speed: Time in seconds for one complete revolution
-        starting_angle: Starting angle in degrees (0 = +X axis, 90 = +Y axis)
+        starting_angle: Starting angle in degrees
+        orbit_axis: Axis to orbit around ('z', 'x', or 'y')
     """
     poi: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     elevation: float = 1.5
     radius: float = 5.0
     speed: float = 30.0  # seconds per circle
     starting_angle: float = 0.0  # degrees
+    orbit_axis: str = "z"  # 'z' = horizontal orbit, 'x' or 'y' = vertical orbits
+    invert_direction: bool = False  # Invert the offset direction
     
     def get_camera_position(self, t: float) -> Tuple[float, float, float]:
         """Get camera position at time t.
@@ -38,10 +41,30 @@ class CameraTrack:
         # Full circle = 2*pi radians over 'speed' seconds
         angle_rad = math.radians(self.starting_angle) + (2.0 * math.pi * t / self.speed)
         
-        # Camera position on the circle at elevation above POI
-        x = self.poi[0] + self.radius * math.cos(angle_rad)
-        y = self.poi[1] + self.radius * math.sin(angle_rad)
-        z = self.poi[2] + self.elevation
+        # Apply inversion to elevation offset
+        offset = -self.elevation if self.invert_direction else self.elevation
+        
+        # Camera position depends on orbit axis
+        if self.orbit_axis == "z":
+            # Orbit around Z axis (horizontal circle in XY plane)
+            x = self.poi[0] + self.radius * math.cos(angle_rad)
+            y = self.poi[1] + self.radius * math.sin(angle_rad)
+            z = self.poi[2] + offset
+        elif self.orbit_axis == "x":
+            # Orbit around X axis (vertical circle in YZ plane)
+            x = self.poi[0] + offset
+            y = self.poi[1] + self.radius * math.cos(angle_rad)
+            z = self.poi[2] + self.radius * math.sin(angle_rad)
+        elif self.orbit_axis == "y":
+            # Orbit around Y axis (vertical circle in XZ plane)
+            x = self.poi[0] + self.radius * math.cos(angle_rad)
+            y = self.poi[1] + offset
+            z = self.poi[2] + self.radius * math.sin(angle_rad)
+        else:
+            # Default to Z axis
+            x = self.poi[0] + self.radius * math.cos(angle_rad)
+            y = self.poi[1] + self.radius * math.sin(angle_rad)
+            z = self.poi[2] + offset
         
         return (x, y, z)
     
@@ -109,21 +132,44 @@ def compute_camera_position(
     poi: Tuple[float, float, float],
     elevation: float,
     radius: float,
-    angle_degrees: float
+    angle_degrees: float,
+    orbit_axis: str = "z",
+    invert_direction: bool = False
 ) -> Tuple[float, float, float]:
     """Compute camera position for a given angle on the circular track.
     
     Args:
         poi: Point of interest (x, y, z)
-        elevation: Height above POI
+        elevation: Offset along orbit axis
         radius: Radius of the circle
-        angle_degrees: Angle in degrees (0 = +X, 90 = +Y)
+        angle_degrees: Angle in degrees
+        orbit_axis: Axis to orbit around ('z', 'x', or 'y')
+        invert_direction: Invert the offset direction
         
     Returns:
         Camera position (x, y, z)
     """
     angle_rad = math.radians(angle_degrees)
-    x = poi[0] + radius * math.cos(angle_rad)
-    y = poi[1] + radius * math.sin(angle_rad)
-    z = poi[2] + elevation
+    offset = -elevation if invert_direction else elevation
+    
+    if orbit_axis == "z":
+        # Orbit around Z axis (horizontal circle in XY plane)
+        x = poi[0] + radius * math.cos(angle_rad)
+        y = poi[1] + radius * math.sin(angle_rad)
+        z = poi[2] + offset
+    elif orbit_axis == "x":
+        # Orbit around X axis (vertical circle in YZ plane)
+        x = poi[0] + offset
+        y = poi[1] + radius * math.cos(angle_rad)
+        z = poi[2] + radius * math.sin(angle_rad)
+    elif orbit_axis == "y":
+        # Orbit around Y axis (vertical circle in XZ plane)
+        x = poi[0] + radius * math.cos(angle_rad)
+        y = poi[1] + offset
+        z = poi[2] + radius * math.sin(angle_rad)
+    else:
+        x = poi[0] + radius * math.cos(angle_rad)
+        y = poi[1] + radius * math.sin(angle_rad)
+        z = poi[2] + offset
+    
     return (x, y, z)
