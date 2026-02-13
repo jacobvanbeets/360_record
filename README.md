@@ -45,27 +45,12 @@ A plugin for [LichtFeld Studio](https://lichtfeld.io) that enables recording cam
 
 ## Installation
 
-1. Clone or download this repository
-2. Create a junction/symlink to the LichtFeld plugins directory:
-   ```powershell
-   # Windows (PowerShell as Admin)
-   New-Item -ItemType Junction -Path "$env:USERPROFILE\.lichtfeld\plugins\360_record" -Target "C:\path\to\360_record"
-   ```
-   ```bash
-   # macOS/Linux
-   ln -s /path/to/360_record ~/.lichtfeld/plugins/360_record
-   ```
-3. Restart LichtFeld Studio or reload plugins
+1. Copy the repository URL: `https://github.com/jacobvanbeets/360_record`
+2. Open **LichtFeld Studio**
+3. Go to the **Plugin Manager**
+4. Paste the URL and click **Install**
 
-## Dependencies
-
-- **numpy** - Array operations
-- **imageio[pyav]** - MP4 video encoding
-
-Install with:
-```bash
-pip install numpy imageio[pyav]
-```
+That's it! LFS will handle all dependencies automatically.
 
 ## Usage
 
