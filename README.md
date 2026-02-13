@@ -2,7 +2,9 @@
 
 A plugin for [LichtFeld Studio](https://lichtfeld.io) that enables recording camera path videos around 3D Gaussian Splat scenes.
 
-[![Demo Video](https://img.youtube.com/vi/eFl7kilU9ts/maxresdefault.jpg)](https://www.youtube.com/watch?v=eFl7kilU9ts)
+[![Watch Demo Video](https://img.youtube.com/vi/eFl7kilU9ts/maxresdefault.jpg)](https://www.youtube.com/watch?v=eFl7kilU9ts)
+
+**▶️ Click the image above to watch the demo video**
 
 ## Features
 
