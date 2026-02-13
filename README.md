@@ -2,6 +2,8 @@
 
 A plugin for [LichtFeld Studio](https://lichtfeld.io) that enables recording camera path videos around 3D Gaussian Splat scenes.
 
+https://youtu.be/eFl7kilU9ts
+
 ## Features
 
 ### Circular Camera Track (360° Recording)
