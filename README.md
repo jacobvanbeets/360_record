@@ -8,40 +8,46 @@ A plugin for [LichtFeld Studio](https://lichtfeld.io) that enables recording cam
 
 ## Features
 
-### Circular Camera Track (360° Recording)
-- Pick a **Point of Interest (POI)** on your model
-- Set **elevation** (offset above/below POI)
-- Set **radius** (distance from POI)
-- Choose **orbit axis** (X, Y, or Z)
-- Adjustable **starting angle**
-- Configurable **speed** (seconds per full circle)
-- Invert direction option
+Create complex camera paths by combining **Linear** and **Orbit** segments in any order.
 
-### Linear Camera Path
-- Create **multi-segment paths** with connected waypoints
-- Pick **start and end points** for each segment
+### Linear Segments
+- Pick **start and end points** on your model
 - Per-segment **look mode**:
   - **Look Forward** - Camera looks along travel direction
   - **Look at POI** - Camera looks at a specific point of interest
 - **Smooth transitions** with Catmull-Rom spline interpolation
-- Adjustable **smoothing factor** for corner transitions
-- **Elevation offset** above the path
-- **Global travel speed** (units per second)
 - **Walking Speed** preset (1.4 m/s for realistic walkthroughs)
+
+### Orbit Segments (360° Camera)
+- Pick a **Point of Interest (POI)** as the orbit center
+- Set **radius** (distance from POI)
+- Set **elevation** (offset along orbit axis)
+- Choose **orbit axis** (X, Y, or Z)
+- Adjustable **start angle** and **arc amount** (partial or full circles)
+- Configurable **duration** (seconds for the orbit)
+
+### Path Settings
+- **Elevation offset** above the path (for linear segments)
+- **Travel speed** (units per second for linear segments)
+- **Smoothing factor** for corner transitions
+- **Camera up axis** selection (X, Y, or Z)
 
 ### Recording Options
 - **Resolution presets**: 720p, 1080p, 1440p, 4K, Square
 - Adjustable **FPS** (1-120)
 - Configurable **Field of View**
 - Export as **MP4 video** or **PNG frame sequence**
+- **Hardware encoding** (GPU acceleration) - auto-detects NVIDIA NVENC, AMD AMF, Intel QuickSync
 - **Live progress bar** during recording
 
 ### Viewport Preview
 - Real-time visualization of camera paths
-- Start/end point markers
+- Start/end point markers for each segment
+- Orbit arc visualization
 - POI markers
 - Smoothed path overlay
-- Transition indicators
+- Segment transition indicators
+- **Click segment headers** to highlight in 3D view
 
 ## Installation
 
@@ -54,38 +60,25 @@ That's it! LFS will handle all dependencies automatically.
 
 ## Usage
 
-### Circular Track (360° Video)
-1. Open the **Camera Track** panel
-2. Click **Pick Point of Interest** and click on your model
-3. Adjust elevation, radius, and speed
-4. Choose orbit axis and starting angle
-5. Set recording options (resolution, FPS, output path)
-6. Click **RECORD VIDEO** or **EXPORT FRAMES**
+1. Open the **Camera Path** panel
+2. Click **+ Linear** or **+ Orbit** to add a segment
+3. Configure the segment:
+   - **Linear**: Pick start and end points, choose look mode
+   - **Orbit**: Pick POI, set radius, elevation, arc amount, and duration
+4. Add more segments as needed (mix linear and orbit freely)
+5. Adjust path settings (speed, smoothing, elevation)
+6. Set recording options (resolution, FPS, output path)
+7. Click **RECORD VIDEO** or **EXPORT FRAMES**
 
-### Linear Path
-1. Open the **Linear Path** panel
-2. Click **+ Add Segment**
-3. Pick the **start point** (click on model)
-4. Pick the **end point**
-5. Choose look mode (Forward or POI)
-6. Add more segments as needed (they auto-connect)
-7. Adjust speed, smoothing, and elevation
-8. Set recording options
-9. Click **RECORD VIDEO** or **EXPORT FRAMES**
+## Visualization Colors
 
-## Track Visualization
-
-**Circular Track:**
-- **Red marker**: Point of Interest
-- **Cyan circle**: Camera orbit path
-- **Green marker**: Starting position
-
-**Linear Path:**
-- **Green markers**: Segment start points (S1, S2, ...)
-- **Orange markers**: Segment end points (E1, E2, ...)
-- **Cyan lines**: Segment paths
-- **Yellow curve**: Smoothed camera path
-- **Pink markers**: POI points
+- **Green markers (S1, S2...)**: Segment start points
+- **Orange markers (E1, E2...)**: Segment end points
+- **Pink markers (O1, O2...)**: Orbit center POIs
+- **Cyan lines**: Linear segment paths
+- **Purple arcs**: Orbit segment paths
+- **Yellow curve**: Smoothed camera path overlay
+- **Blue dashed**: Segment transitions
 
 ## API Requirements
 

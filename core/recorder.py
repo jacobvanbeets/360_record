@@ -57,12 +57,56 @@ class RecordingSettings:
         fps: Frames per second
         quality: Video quality (0-100, higher is better)
         fov: Field of view in degrees
+        use_hardware_encoding: Try GPU-accelerated encoding (falls back to software)
     """
     output_path: str = ""
     resolution: Tuple[int, int] = (1920, 1080)
     fps: float = 30.0
     quality: int = 85
     fov: float = 60.0
+    use_hardware_encoding: bool = True
+
+
+def _get_video_encoder(use_hardware: bool) -> Tuple[str, str]:
+    """Get the best available video encoder.
+    
+    Args:
+        use_hardware: Whether to try hardware encoders first
+        
+    Returns:
+        Tuple of (codec_name, encoder_info_string)
+    """
+    if not use_hardware:
+        return "h264", "software (h264)"
+    
+    # Try hardware encoders in order of preference
+    # These are built into FFmpeg/PyAV, just need GPU drivers
+    hw_encoders = [
+        ("h264_nvenc", "NVIDIA NVENC"),  # NVIDIA
+        ("h264_amf", "AMD AMF"),          # AMD
+        ("h264_qsv", "Intel QuickSync"),  # Intel
+    ]
+    
+    try:
+        import av
+        available_codecs = set()
+        # Check what codecs are available
+        for codec in av.codecs_available:
+            available_codecs.add(codec)
+        
+        for encoder, name in hw_encoders:
+            if encoder in available_codecs:
+                # Try to actually create an encoder to verify it works
+                try:
+                    test_codec = av.CodecContext.create(encoder, 'w')
+                    test_codec.close()
+                    return encoder, f"hardware ({name})"
+                except:
+                    continue
+    except:
+        pass
+    
+    return "h264", "software (h264)"
 
 
 def get_default_output_path() -> str:
@@ -135,14 +179,26 @@ def record_circular_video(
         if progress_callback:
             progress_callback(0.02, "Starting video encoding...")
         
-        # Open video writer
-        # Use ffmpeg backend with h264 codec
+        # Open video writer with best available encoder
+        encoder, encoder_info = _get_video_encoder(settings.use_hardware_encoding)
+        
+        if progress_callback:
+            progress_callback(0.02, f"Encoding: {encoder_info}")
+        
         writer = iio.imopen(
             settings.output_path,
             "w",
             plugin="pyav",
         )
-        writer.init_video_stream("h264", fps=settings.fps)
+        
+        try:
+            writer.init_video_stream(encoder, fps=settings.fps)
+        except Exception:
+            # Fall back to software encoding
+            writer.close()
+            writer = iio.imopen(settings.output_path, "w", plugin="pyav")
+            writer.init_video_stream("h264", fps=settings.fps)
+            encoder_info = "software (h264) [fallback]"
         
         # Record each frame
         frame_duration = 1.0 / settings.fps
@@ -249,13 +305,26 @@ def record_linear_video(
         if progress_callback:
             progress_callback(0.02, "Starting video encoding...")
         
-        # Open video writer
+        # Open video writer with best available encoder
+        encoder, encoder_info = _get_video_encoder(settings.use_hardware_encoding)
+        
+        if progress_callback:
+            progress_callback(0.02, f"Encoding: {encoder_info}")
+        
         writer = iio.imopen(
             settings.output_path,
             "w",
             plugin="pyav",
         )
-        writer.init_video_stream("h264", fps=settings.fps)
+        
+        try:
+            writer.init_video_stream(encoder, fps=settings.fps)
+        except Exception:
+            # Fall back to software encoding
+            writer.close()
+            writer = iio.imopen(settings.output_path, "w", plugin="pyav")
+            writer.init_video_stream("h264", fps=settings.fps)
+            encoder_info = "software (h264) [fallback]"
         
         # Record each frame
         frame_duration = 1.0 / settings.fps

@@ -2,6 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Panels for 360 record plugin."""
 
-from .camera_track_panel import CameraTrackPanel
+from .linear_path_panel import LinearPathPanel
 
-__all__ = ["CameraTrackPanel"]
+__all__ = ["LinearPathPanel"]

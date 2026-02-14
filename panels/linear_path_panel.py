@@ -10,7 +10,7 @@ import numpy as np
 import lichtfeld as lf
 from lfs_plugins.types import Panel
 
-from ..core.linear_path import LinearPath, LineSegment, compute_linear_camera_position
+from ..core.linear_path import LinearPath, LineSegment, OrbitSegment, compute_linear_camera_position
 from ..core.recorder import RecordingSettings, get_default_output_path, record_linear_video, record_linear_frames_to_folder
 from ..operators.point_picker import set_point_callback, clear_point_callback, was_point_cancelled
 
@@ -24,6 +24,8 @@ _linear_path_state = {
     'elevation': 1.5,
     'up_axis': 'z',
     'invert_elevation': False,
+    'highlighted_segment': -1,  # Index of segment to highlight, -1 = none
+    'highlight_time': 0.0,  # Time when highlight started
 }
 
 # Pending point pick result
@@ -38,118 +40,206 @@ def _on_point_picked(world_pos):
     lf.ui.request_redraw()
 
 
+import math as _math
+import time as _time
+
 def _linear_path_draw_handler(ctx):
     """Draw handler for visualizing the linear path in the viewport."""
     segments = _linear_path_state['segments']
     if not segments or not _linear_path_state['show_preview']:
         return
     
-    smooth_factor = _linear_path_state['smooth_factor']
+    # Highlight state
+    highlighted_idx = _linear_path_state.get('highlighted_segment', -1)
+    highlight_start = _linear_path_state.get('highlight_time', 0.0)
+    highlight_duration = 1.5  # seconds
+    
+    # Calculate highlight pulse (fades out over time)
+    highlight_alpha = 0.0
+    if highlighted_idx >= 0:
+        elapsed = _time.time() - highlight_start
+        if elapsed < highlight_duration:
+            # Pulsing effect that fades out
+            pulse = _math.sin(elapsed * 8.0) * 0.5 + 0.5
+            fade = 1.0 - (elapsed / highlight_duration)
+            highlight_alpha = pulse * fade
+            lf.ui.request_redraw()  # Keep animating
+        else:
+            # Clear highlight after duration
+            _linear_path_state['highlighted_segment'] = -1
     
     # Colors
     line_color = (0.2, 0.8, 1.0, 0.8)
-    smooth_color = (1.0, 0.8, 0.2, 0.6)
     start_color = (0.2, 1.0, 0.2, 1.0)
     end_color = (1.0, 0.4, 0.2, 1.0)
     poi_color = (1.0, 0.2, 0.8, 1.0)
+    orbit_color = (0.8, 0.4, 1.0, 0.8)
     transition_color = (0.5, 0.5, 1.0, 0.5)
     
-    # Get elevation settings
+    # Cache for orbit data to avoid recreating objects
+    orbit_cache = {}
+    
+    def get_orbit_data(idx, seg_data):
+        """Get cached orbit start/end points."""
+        if idx not in orbit_cache:
+            poi = seg_data.get('poi')
+            if poi:
+                orbit = OrbitSegment(
+                    poi=poi,
+                    radius=seg_data.get('radius', 5.0),
+                    elevation=seg_data.get('elevation', 1.5),
+                    orbit_axis=seg_data.get('orbit_axis', 'z'),
+                    start_angle=seg_data.get('start_angle', 0.0),
+                    arc_degrees=seg_data.get('arc_degrees', 360.0),
+                    invert_direction=seg_data.get('invert_direction', False)
+                )
+                # Pre-calculate arc points
+                num_points = max(24, int(abs(orbit.arc_degrees) / 6))
+                arc_points = [orbit.get_position_at(j / num_points) for j in range(num_points + 1)]
+                orbit_cache[idx] = {
+                    'start': orbit.get_start_point(),
+                    'end': orbit.get_end_point(),
+                    'arc_points': arc_points
+                }
+            else:
+                orbit_cache[idx] = None
+        return orbit_cache[idx]
+    
+    # Draw each segment
+    for i, seg_data in enumerate(segments):
+        seg_type = seg_data.get('type', 'linear')
+        is_highlighted = (i == highlighted_idx and highlight_alpha > 0)
+        
+        if seg_type == 'orbit':
+            poi = seg_data.get('poi')
+            if poi:
+                orbit_data = get_orbit_data(i, seg_data)
+                if not orbit_data:
+                    continue
+                
+                # Draw POI center
+                point_size = 22.0 + (10.0 * highlight_alpha) if is_highlighted else 22.0
+                color = (1.0, 1.0, 0.0, highlight_alpha + 0.5) if is_highlighted else poi_color
+                ctx.draw_point_3d(poi, color, point_size)
+                screen_poi = ctx.world_to_screen(poi)
+                if screen_poi:
+                    ctx.draw_text_2d((screen_poi[0] + 10, screen_poi[1] - 8), f"O{i+1}", poi_color)
+                
+                # Draw arc from cached points
+                arc_color = (1.0, 1.0, 0.0, 0.5 + highlight_alpha * 0.5) if is_highlighted else orbit_color
+                arc_width = 2.5 + (3.0 * highlight_alpha) if is_highlighted else 2.5
+                arc_points = orbit_data['arc_points']
+                for j in range(len(arc_points) - 1):
+                    ctx.draw_line_3d(arc_points[j], arc_points[j + 1], arc_color, arc_width)
+                
+                # Draw start/end points
+                ctx.draw_point_3d(orbit_data['start'], start_color, 16.0)
+                ctx.draw_point_3d(orbit_data['end'], end_color, 16.0)
+                
+                # Draw radius line
+                ctx.draw_line_3d(poi, orbit_data['start'], (poi_color[0], poi_color[1], poi_color[2], 0.3), 1.0)
+        else:
+            start = seg_data.get('start')
+            end = seg_data.get('end')
+            
+            if start:
+                point_size = 18.0 + (10.0 * highlight_alpha) if is_highlighted else 18.0
+                color = (1.0, 1.0, 0.0, highlight_alpha + 0.5) if is_highlighted else start_color
+                ctx.draw_point_3d(start, color, point_size)
+                screen_start = ctx.world_to_screen(start)
+                if screen_start:
+                    ctx.draw_text_2d((screen_start[0] + 10, screen_start[1] - 8), f"S{i+1}", start_color)
+            
+            if end:
+                point_size = 18.0 + (10.0 * highlight_alpha) if is_highlighted else 18.0
+                color = (1.0, 1.0, 0.0, highlight_alpha + 0.5) if is_highlighted else end_color
+                ctx.draw_point_3d(end, color, point_size)
+                screen_end = ctx.world_to_screen(end)
+                if screen_end:
+                    ctx.draw_text_2d((screen_end[0] + 10, screen_end[1] - 8), f"E{i+1}", end_color)
+            
+            if start and end:
+                seg_color = (1.0, 1.0, 0.0, 0.5 + highlight_alpha * 0.5) if is_highlighted else line_color
+                seg_width = 2.0 + (3.0 * highlight_alpha) if is_highlighted else 2.0
+                ctx.draw_line_3d(start, end, seg_color, seg_width)
+                
+                # Draw midpoint indicator
+                mid = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2, (start[2] + end[2]) / 2)
+                ctx.draw_point_3d(mid, line_color, 8.0)
+            
+            # Draw POI if set
+            poi = seg_data.get('poi')
+            if seg_data.get('look_mode') == "poi" and poi:
+                ctx.draw_point_3d(poi, poi_color, 20.0)
+                screen_poi = ctx.world_to_screen(poi)
+                if screen_poi:
+                    ctx.draw_text_2d((screen_poi[0] + 10, screen_poi[1] - 8), f"POI{i+1}", poi_color)
+                if start and end:
+                    mid = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2, (start[2] + end[2]) / 2)
+                    ctx.draw_line_3d(mid, poi, (poi_color[0], poi_color[1], poi_color[2], 0.4), 1.0)
+        
+        # Draw transition to next segment
+        if i < len(segments) - 1:
+            if seg_type == 'orbit':
+                orbit_data = get_orbit_data(i, seg_data)
+                curr_end = orbit_data['end'] if orbit_data else None
+            else:
+                curr_end = seg_data.get('end')
+            
+            next_seg = segments[i + 1]
+            if next_seg.get('type') == 'orbit':
+                next_orbit_data = get_orbit_data(i + 1, next_seg)
+                next_start = next_orbit_data['start'] if next_orbit_data else None
+            else:
+                next_start = next_seg.get('start')
+            
+            if curr_end and next_start:
+                ctx.draw_line_3d(curr_end, next_start, transition_color, 1.5)
+    
+    # Draw smoothed camera path overlay
+    smooth_color = (1.0, 0.8, 0.2, 0.6)
     elevation = _linear_path_state.get('elevation', 0.0)
     up_axis = _linear_path_state.get('up_axis', 'z')
     invert_elevation = _linear_path_state.get('invert_elevation', False)
+    smooth_factor = _linear_path_state.get('smooth_factor', 0.5)
     
-    # Build LinearPath for smooth curve visualization
+    # Build path for smooth visualization
     path = LinearPath(
         smooth_factor=smooth_factor,
         elevation=elevation,
         up_axis=up_axis,
         invert_elevation=invert_elevation
     )
+    
     for seg_data in segments:
-        if seg_data.get('start') and seg_data.get('end'):
-            segment = LineSegment(
+        seg_type = seg_data.get('type', 'linear')
+        if seg_type == 'orbit' and seg_data.get('poi'):
+            path.segments.append(OrbitSegment(
+                poi=seg_data['poi'],
+                radius=seg_data.get('radius', 5.0),
+                elevation=seg_data.get('elevation', 1.5),
+                orbit_axis=seg_data.get('orbit_axis', 'z'),
+                start_angle=seg_data.get('start_angle', 0.0),
+                arc_degrees=seg_data.get('arc_degrees', 360.0),
+                duration=seg_data.get('duration', 30.0),
+                invert_direction=seg_data.get('invert_direction', False)
+            ))
+        elif seg_data.get('start') and seg_data.get('end'):
+            path.segments.append(LineSegment(
                 start_point=seg_data['start'],
                 end_point=seg_data['end'],
                 look_mode=seg_data.get('look_mode', 'forward'),
                 poi=seg_data.get('poi')
-            )
-            path.segments.append(segment)
+            ))
     
-    # Draw each segment
-    for i, seg_data in enumerate(segments):
-        start = seg_data.get('start')
-        end = seg_data.get('end')
-        poi = seg_data.get('poi')
-        look_mode = seg_data.get('look_mode', 'forward')
-        
-        # Draw start point (even if end is not set yet)
-        if start:
-            ctx.draw_point_3d(start, start_color, 18.0)
-            screen_start = ctx.world_to_screen(start)
-            if screen_start:
-                ctx.draw_text_2d(
-                    (screen_start[0] + 10, screen_start[1] - 8),
-                    f"S{i+1}",
-                    start_color
-                )
-        
-        # Draw end point (even if start is not set yet)
-        if end:
-            ctx.draw_point_3d(end, end_color, 18.0)
-            screen_end = ctx.world_to_screen(end)
-            if screen_end:
-                ctx.draw_text_2d(
-                    (screen_end[0] + 10, screen_end[1] - 8),
-                    f"E{i+1}",
-                    end_color
-                )
-        
-        # Draw segment line if both points are set
-        if start and end:
-            ctx.draw_line_3d(start, end, line_color, 2.0)
-            
-            # Draw direction arrow at midpoint
-            mid = (
-                (start[0] + end[0]) / 2,
-                (start[1] + end[1]) / 2,
-                (start[2] + end[2]) / 2
-            )
-            ctx.draw_point_3d(mid, line_color, 8.0)
-        
-        # Draw POI if set
-        if look_mode == "poi" and poi:
-            ctx.draw_point_3d(poi, poi_color, 20.0)
-            screen_poi = ctx.world_to_screen(poi)
-            if screen_poi:
-                ctx.draw_text_2d(
-                    (screen_poi[0] + 10, screen_poi[1] - 8),
-                    f"POI{i+1}",
-                    poi_color
-                )
-            # Draw line from segment midpoint to POI
-            if start and end:
-                mid = (
-                    (start[0] + end[0]) / 2,
-                    (start[1] + end[1]) / 2,
-                    (start[2] + end[2]) / 2
-                )
-                ctx.draw_line_3d(mid, poi, (poi_color[0], poi_color[1], poi_color[2], 0.4), 1.0)
-        
-        # Draw transition to next segment
-        if i < len(segments) - 1 and end:
-            next_start = segments[i + 1].get('start')
-            if next_start:
-                ctx.draw_line_3d(end, next_start, transition_color, 1.5)
-    
-    # Draw smoothed path overlay if smooth_factor > 0
-    if smooth_factor > 0 and len(path.segments) >= 1:
-        total_dist = path.get_total_distance()
-        if total_dist > 0:
-            num_samples = max(50, int(total_dist * 10))
+    if path.segments:
+        total_dur = path.get_total_duration()
+        if total_dur > 0:
+            # Reduced samples for performance (was 100+, now ~50)
+            num_samples = min(50, max(20, int(total_dur * 10)))
             prev_pos = None
             for i in range(num_samples + 1):
-                t = (i / num_samples) * path.get_total_duration()
+                t = (i / num_samples) * total_dur
                 pos = path.get_camera_position(t)
                 if prev_pos is not None:
                     ctx.draw_line_3d(prev_pos, pos, smooth_color, 1.5)
@@ -169,11 +259,11 @@ def _ensure_linear_draw_handler():
 
 
 class LinearPathPanel(Panel):
-    """Panel for configuring and recording linear camera path videos."""
+    """Panel for configuring and recording camera path videos (linear + orbit segments)."""
     
-    label = "Linear Path"
+    label = "Camera Path"
     space = "MAIN_PANEL_TAB"
-    order = 31  # After Camera Track panel
+    order = 30
     
     RESOLUTION_ITEMS = [
         ((1920, 1080), "1080p (1920x1080)"),
@@ -192,6 +282,17 @@ class LinearPathPanel(Panel):
         ("z", "Z-Axis (Up)"),
         ("y", "Y-Axis (Up)"),
         ("x", "X-Axis (Up)"),
+    ]
+    
+    SEGMENT_TYPE_ITEMS = [
+        ("linear", "Linear"),
+        ("orbit", "Orbit"),
+    ]
+    
+    ORBIT_AXIS_ITEMS = [
+        ("z", "Z-Axis"),
+        ("y", "Y-Axis"),
+        ("x", "X-Axis"),
     ]
     
     # Walking speed in meters/second (average ~1.4 m/s)
@@ -219,6 +320,7 @@ class LinearPathPanel(Panel):
         self._fov = 60.0
         self._output_path = ""
         self._export_frames = False
+        self._use_hardware_encoding = True
         
         # Preview
         self._show_preview = True
@@ -290,18 +392,49 @@ class LinearPathPanel(Panel):
         self._status_is_error = False
         lf.ui.request_redraw()
     
-    def _add_segment(self):
-        """Add a new segment."""
-        new_segment = {
-            'start': None,
-            'end': None,
-            'look_mode': 'forward',
-            'poi': None,
-        }
+    def _add_segment(self, segment_type: str = "linear"):
+        """Add a new segment.
         
-        # If we have segments, default start to previous end
-        if self._segments and self._segments[-1].get('end'):
-            new_segment['start'] = self._segments[-1]['end']
+        Args:
+            segment_type: "linear" or "orbit"
+        """
+        if segment_type == "orbit":
+            new_segment = {
+                'type': 'orbit',
+                'poi': None,
+                'radius': 5.0,
+                'elevation': 1.5,
+                'orbit_axis': 'z',
+                'start_angle': 0.0,
+                'arc_degrees': 360.0,
+                'duration': 30.0,
+                'invert_direction': False,
+            }
+        else:
+            new_segment = {
+                'type': 'linear',
+                'start': None,
+                'end': None,
+                'look_mode': 'forward',
+                'poi': None,
+            }
+            # If we have segments, default start to previous end
+            if self._segments:
+                prev_seg = self._segments[-1]
+                if prev_seg.get('type') == 'orbit' and prev_seg.get('poi'):
+                    # Connect to orbit's exit point
+                    orbit = OrbitSegment(
+                        poi=prev_seg['poi'],
+                        radius=prev_seg.get('radius', 5.0),
+                        elevation=prev_seg.get('elevation', 1.5),
+                        orbit_axis=prev_seg.get('orbit_axis', 'z'),
+                        start_angle=prev_seg.get('start_angle', 0.0),
+                        arc_degrees=prev_seg.get('arc_degrees', 360.0),
+                        invert_direction=prev_seg.get('invert_direction', False)
+                    )
+                    new_segment['start'] = orbit.get_end_point()
+                elif prev_seg.get('end'):
+                    new_segment['start'] = prev_seg['end']
         
         self._segments.append(new_segment)
         self._expanded_segments[len(self._segments) - 1] = True  # Expand new segment
@@ -309,19 +442,48 @@ class LinearPathPanel(Panel):
         lf.ui.request_redraw()
     
     def _remove_segment(self, idx: int):
-        """Remove a segment."""
-        if 0 <= idx < len(self._segments):
-            del self._segments[idx]
-            # Update expanded state indices
-            new_expanded = {}
-            for old_idx, expanded in self._expanded_segments.items():
-                if old_idx < idx:
-                    new_expanded[old_idx] = expanded
-                elif old_idx > idx:
-                    new_expanded[old_idx - 1] = expanded
-            self._expanded_segments = new_expanded
-            self._update_draw_state()
-            lf.ui.request_redraw()
+        """Remove a segment and reconnect remaining segments if needed."""
+        if not (0 <= idx < len(self._segments)):
+            return
+        
+        # If removing a middle segment, reconnect the next segment to the previous
+        if idx > 0 and idx < len(self._segments) - 1:
+            prev_seg = self._segments[idx - 1]
+            next_seg = self._segments[idx + 1]
+            
+            # Get the end point of the previous segment
+            if prev_seg.get('type') == 'orbit' and prev_seg.get('poi'):
+                # Get orbit's end point
+                orbit = OrbitSegment(
+                    poi=prev_seg['poi'],
+                    radius=prev_seg.get('radius', 5.0),
+                    elevation=prev_seg.get('elevation', 1.5),
+                    orbit_axis=prev_seg.get('orbit_axis', 'z'),
+                    start_angle=prev_seg.get('start_angle', 0.0),
+                    arc_degrees=prev_seg.get('arc_degrees', 360.0),
+                    invert_direction=prev_seg.get('invert_direction', False)
+                )
+                connect_point = orbit.get_end_point()
+            else:
+                connect_point = prev_seg.get('end')
+            
+            # Connect the next segment's start to the previous segment's end
+            if connect_point and next_seg.get('type') == 'linear':
+                next_seg['start'] = connect_point
+        
+        # Remove the segment
+        del self._segments[idx]
+        
+        # Update expanded state indices
+        new_expanded = {}
+        for old_idx, expanded in self._expanded_segments.items():
+            if old_idx < idx:
+                new_expanded[old_idx] = expanded
+            elif old_idx > idx:
+                new_expanded[old_idx - 1] = expanded
+        self._expanded_segments = new_expanded
+        self._update_draw_state()
+        lf.ui.request_redraw()
     
     def _move_segment_up(self, idx: int):
         """Move a segment up in the list."""
@@ -356,6 +518,13 @@ class LinearPathPanel(Panel):
         _linear_path_state['up_axis'] = self.UP_AXIS_ITEMS[self._up_axis_idx][0]
         _linear_path_state['invert_elevation'] = self._invert_elevation
     
+    def _highlight_segment(self, idx: int):
+        """Highlight a segment in the 3D view with a pulsing effect."""
+        import time
+        _linear_path_state['highlighted_segment'] = idx
+        _linear_path_state['highlight_time'] = time.time()
+        lf.ui.request_redraw()
+    
     def _get_path(self) -> Optional[LinearPath]:
         """Get the current linear path configuration."""
         if not self._segments:
@@ -372,14 +541,32 @@ class LinearPathPanel(Panel):
         )
         
         for seg_data in self._segments:
-            if seg_data.get('start') and seg_data.get('end'):
-                segment = LineSegment(
-                    start_point=seg_data['start'],
-                    end_point=seg_data['end'],
-                    look_mode=seg_data.get('look_mode', 'forward'),
-                    poi=seg_data.get('poi')
-                )
-                path.segments.append(segment)
+            seg_type = seg_data.get('type', 'linear')
+            
+            if seg_type == 'orbit':
+                # Orbit segment - needs POI
+                if seg_data.get('poi'):
+                    segment = OrbitSegment(
+                        poi=seg_data['poi'],
+                        radius=seg_data.get('radius', 5.0),
+                        elevation=seg_data.get('elevation', 1.5),
+                        orbit_axis=seg_data.get('orbit_axis', 'z'),
+                        start_angle=seg_data.get('start_angle', 0.0),
+                        arc_degrees=seg_data.get('arc_degrees', 360.0),
+                        duration=seg_data.get('duration', 30.0),
+                        invert_direction=seg_data.get('invert_direction', False)
+                    )
+                    path.segments.append(segment)
+            else:
+                # Linear segment - needs start and end
+                if seg_data.get('start') and seg_data.get('end'):
+                    segment = LineSegment(
+                        start_point=seg_data['start'],
+                        end_point=seg_data['end'],
+                        look_mode=seg_data.get('look_mode', 'forward'),
+                        poi=seg_data.get('poi')
+                    )
+                    path.segments.append(segment)
         
         return path if path.segments else None
     
@@ -395,7 +582,8 @@ class LinearPathPanel(Panel):
             output_path=self._output_path,
             resolution=resolution,
             fps=self._fps,
-            fov=self._fov
+            fov=self._fov,
+            use_hardware_encoding=self._use_hardware_encoding
         )
     
     def _on_record_progress(self, progress: float, message: str):
@@ -486,42 +674,39 @@ class LinearPathPanel(Panel):
         # === Segments Section ===
         if layout.collapsing_header("Path Segments", default_open=True):
             if not self._segments:
-                layout.text_colored("No segments. Click 'Add Segment' to start.", theme.palette.text_dim)
+                layout.text_colored("No segments. Add a Linear or Orbit segment to start.", theme.palette.text_dim)
             
             # Draw each segment
             for i, seg_data in enumerate(self._segments):
                 is_expanded = self._expanded_segments.get(i, True)
+                seg_type = seg_data.get('type', 'linear')
+                
+                # Determine if segment is complete
+                if seg_type == 'orbit':
+                    is_complete = seg_data.get('poi') is not None
+                    type_label = "Orbit"
+                else:
+                    is_complete = seg_data.get('start') is not None and seg_data.get('end') is not None
+                    type_label = "Linear"
                 
                 # Segment header
-                header_text = f"Segment {i + 1}"
-                if seg_data.get('start') and seg_data.get('end'):
-                    header_text += " ✓"
-                else:
+                header_text = f"{i + 1}. {type_label}"
+                if not is_complete:
                     header_text += " (incomplete)"
                 
                 # Expand/collapse button
-                if layout.button(f"{'▼' if is_expanded else '▶'}##{i}_expand", (20 * scale, 0)):
+                expand_label = "v" if is_expanded else ">"
+                if layout.button(f"{expand_label}##{i}_expand", (20 * scale, 0)):
                     self._expanded_segments[i] = not is_expanded
                 layout.same_line()
                 
-                # Header label
-                layout.label(header_text)
+                # Clickable header label - highlights segment in 3D view
+                if layout.button(f"{header_text}##{i}_header", (0, 0)):
+                    self._highlight_segment(i)
                 layout.same_line()
                 
-                # Move buttons
-                btn_w = 25 * scale
-                if i > 0:
-                    if layout.button(f"↑##{i}_up", (btn_w, 0)):
-                        self._move_segment_up(i)
-                    layout.same_line()
-                
-                if i < len(self._segments) - 1:
-                    if layout.button(f"↓##{i}_down", (btn_w, 0)):
-                        self._move_segment_down(i)
-                    layout.same_line()
-                
                 # Delete button
-                if layout.button(f"✕##{i}_del", (btn_w, 0)):
+                if layout.button(f"Del##{i}_del", (32 * scale, 0)):
                     self._remove_segment(i)
                     continue  # Skip rest of this segment
                 
@@ -529,66 +714,11 @@ class LinearPathPanel(Panel):
                 if is_expanded:
                     layout.indent(15 * scale)
                     
-                    # Check if this segment's start is connected to previous segment's end
-                    is_connected = i > 0 and seg_data.get('start') is not None
-                    
-                    # Start point
-                    layout.label("Start:")
-                    layout.same_line()
-                    
-                    if is_connected:
-                        # Show as connected (linked to previous segment)
-                        layout.text_colored(self._format_point(seg_data.get('start')), (0.5, 0.8, 1.0, 1.0))
-                        layout.same_line()
-                        layout.text_colored("(linked)", theme.palette.text_dim)
-                    else:
-                        # First segment or not connected - show picker
-                        layout.text_colored(self._format_point(seg_data.get('start')), 
-                                           (0.2, 1.0, 0.2, 1.0) if seg_data.get('start') else theme.palette.text_dim)
-                        layout.same_line()
+                    if seg_type == 'orbit':
+                        # === ORBIT SEGMENT UI ===
                         
-                        picking_start = self._picking and self._pick_target == (i, "start")
-                        if picking_start:
-                            if layout.button_styled(f"[Cancel]##{i}_start_cancel", "error", (70 * scale, 0)):
-                                self._cancel_picking()
-                        else:
-                            if layout.button(f"Pick##{i}_start", (50 * scale, 0)):
-                                self._start_picking(i, "start")
-                    
-                    # End point
-                    layout.label("End:")
-                    layout.same_line()
-                    layout.text_colored(self._format_point(seg_data.get('end')),
-                                       (1.0, 0.4, 0.2, 1.0) if seg_data.get('end') else theme.palette.text_dim)
-                    layout.same_line()
-                    
-                    picking_end = self._picking and self._pick_target == (i, "end")
-                    if picking_end:
-                        if layout.button_styled(f"[Cancel]##{i}_end_cancel", "error", (70 * scale, 0)):
-                            self._cancel_picking()
-                    else:
-                        if layout.button(f"Pick##{i}_end", (50 * scale, 0)):
-                            self._start_picking(i, "end")
-                    
-                    # Look mode
-                    layout.label("Look Mode:")
-                    look_mode_labels = [item[1] for item in self.LOOK_MODE_ITEMS]
-                    current_look_idx = 0
-                    for idx, item in enumerate(self.LOOK_MODE_ITEMS):
-                        if item[0] == seg_data.get('look_mode', 'forward'):
-                            current_look_idx = idx
-                            break
-                    
-                    layout.push_item_width(150 * scale)
-                    changed, new_look_idx = layout.combo(f"##look_mode_{i}", current_look_idx, look_mode_labels)
-                    if changed:
-                        seg_data['look_mode'] = self.LOOK_MODE_ITEMS[new_look_idx][0]
-                        self._update_draw_state()
-                    layout.pop_item_width()
-                    
-                    # POI (only if look_mode is "poi")
-                    if seg_data.get('look_mode') == 'poi':
-                        layout.label("POI:")
+                        # POI (required)
+                        layout.label("Center POI:")
                         layout.same_line()
                         layout.text_colored(self._format_point(seg_data.get('poi')),
                                            (1.0, 0.2, 0.8, 1.0) if seg_data.get('poi') else theme.palette.text_dim)
@@ -601,14 +731,166 @@ class LinearPathPanel(Panel):
                         else:
                             if layout.button(f"Pick##{i}_poi", (50 * scale, 0)):
                                 self._start_picking(i, "poi")
+                        
+                        # Orbit Axis
+                        layout.label("Orbit Axis:")
+                        orbit_axis_labels = [item[1] for item in self.ORBIT_AXIS_ITEMS]
+                        current_axis_idx = 0
+                        for idx, item in enumerate(self.ORBIT_AXIS_ITEMS):
+                            if item[0] == seg_data.get('orbit_axis', 'z'):
+                                current_axis_idx = idx
+                                break
+                        layout.push_item_width(100 * scale)
+                        changed, new_axis_idx = layout.combo(f"##orbit_axis_{i}", current_axis_idx, orbit_axis_labels)
+                        if changed:
+                            seg_data['orbit_axis'] = self.ORBIT_AXIS_ITEMS[new_axis_idx][0]
+                            self._update_draw_state()
+                        layout.pop_item_width()
+                        
+                        # Radius
+                        layout.label("Radius:")
+                        layout.push_item_width(-1)
+                        changed, new_radius = layout.drag_float(f"##radius_{i}", seg_data.get('radius', 5.0), 0.1, 0.1, 500.0)
+                        if changed:
+                            seg_data['radius'] = max(0.1, new_radius)
+                            self._update_draw_state()
+                        layout.pop_item_width()
+                        if layout.is_item_hovered():
+                            layout.set_tooltip("Drag or Ctrl+Click to enter value manually")
+                        
+                        # Elevation (offset along orbit axis)
+                        layout.label("Elevation:")
+                        layout.push_item_width(-1)
+                        changed, new_elev = layout.drag_float(f"##orb_elev_{i}", seg_data.get('elevation', 1.5), 0.1, -500.0, 500.0)
+                        if changed:
+                            seg_data['elevation'] = new_elev
+                            self._update_draw_state()
+                        layout.pop_item_width()
+                        if layout.is_item_hovered():
+                            layout.set_tooltip("Drag or Ctrl+Click to enter value manually")
+                        
+                        # Start Angle
+                        layout.label("Start Angle:")
+                        layout.push_item_width(-1)
+                        changed, new_start = layout.slider_float(f"##start_angle_{i}", seg_data.get('start_angle', 0.0), 0.0, 360.0)
+                        if changed:
+                            seg_data['start_angle'] = new_start
+                            self._update_draw_state()
+                        layout.pop_item_width()
+                        
+                        # Arc Degrees
+                        layout.label("Arc Amount (°):")
+                        layout.push_item_width(-1)
+                        changed, new_arc = layout.slider_float(f"##arc_deg_{i}", seg_data.get('arc_degrees', 360.0), -720.0, 720.0)
+                        if changed:
+                            seg_data['arc_degrees'] = new_arc
+                            self._update_draw_state()
+                        layout.pop_item_width()
+                        if layout.is_item_hovered():
+                            layout.set_tooltip("Positive = counter-clockwise, Negative = clockwise. 360 = full circle.")
+                        
+                        # Duration
+                        layout.label("Duration (s):")
+                        layout.push_item_width(-1)
+                        changed, new_dur = layout.slider_float(f"##duration_{i}", seg_data.get('duration', 30.0), 1.0, 120.0)
+                        if changed:
+                            seg_data['duration'] = new_dur
+                            self._update_draw_state()
+                        layout.pop_item_width()
+                        
+                        # Invert direction
+                        changed, new_invert = layout.checkbox(f"Invert Elevation##{i}_invert", seg_data.get('invert_direction', False))
+                        if changed:
+                            seg_data['invert_direction'] = new_invert
+                            self._update_draw_state()
+                        
+                    else:
+                        # === LINEAR SEGMENT UI ===
+                        
+                        # Check if this segment's start is connected to previous segment
+                        is_connected = i > 0 and seg_data.get('start') is not None
+                        
+                        # Start point
+                        layout.label("Start:")
+                        layout.same_line()
+                        
+                        if is_connected:
+                            # Show as connected (linked to previous segment)
+                            layout.text_colored(self._format_point(seg_data.get('start')), (0.5, 0.8, 1.0, 1.0))
+                            layout.same_line()
+                            layout.text_colored("(linked)", theme.palette.text_dim)
+                        else:
+                            # First segment or not connected - show picker
+                            layout.text_colored(self._format_point(seg_data.get('start')), 
+                                               (0.2, 1.0, 0.2, 1.0) if seg_data.get('start') else theme.palette.text_dim)
+                            layout.same_line()
+                            
+                            picking_start = self._picking and self._pick_target == (i, "start")
+                            if picking_start:
+                                if layout.button_styled(f"[Cancel]##{i}_start_cancel", "error", (70 * scale, 0)):
+                                    self._cancel_picking()
+                            else:
+                                if layout.button(f"Pick##{i}_start", (50 * scale, 0)):
+                                    self._start_picking(i, "start")
+                        
+                        # End point
+                        layout.label("End:")
+                        layout.same_line()
+                        layout.text_colored(self._format_point(seg_data.get('end')),
+                                           (1.0, 0.4, 0.2, 1.0) if seg_data.get('end') else theme.palette.text_dim)
+                        layout.same_line()
+                        
+                        picking_end = self._picking and self._pick_target == (i, "end")
+                        if picking_end:
+                            if layout.button_styled(f"[Cancel]##{i}_end_cancel", "error", (70 * scale, 0)):
+                                self._cancel_picking()
+                        else:
+                            if layout.button(f"Pick##{i}_end", (50 * scale, 0)):
+                                self._start_picking(i, "end")
+                        
+                        # Look mode
+                        layout.label("Look Mode:")
+                        look_mode_labels = [item[1] for item in self.LOOK_MODE_ITEMS]
+                        current_look_idx = 0
+                        for idx, item in enumerate(self.LOOK_MODE_ITEMS):
+                            if item[0] == seg_data.get('look_mode', 'forward'):
+                                current_look_idx = idx
+                                break
+                        
+                        layout.push_item_width(150 * scale)
+                        changed, new_look_idx = layout.combo(f"##look_mode_{i}", current_look_idx, look_mode_labels)
+                        if changed:
+                            seg_data['look_mode'] = self.LOOK_MODE_ITEMS[new_look_idx][0]
+                            self._update_draw_state()
+                        layout.pop_item_width()
+                        
+                        # POI (only if look_mode is "poi")
+                        if seg_data.get('look_mode') == 'poi':
+                            layout.label("POI:")
+                            layout.same_line()
+                            layout.text_colored(self._format_point(seg_data.get('poi')),
+                                               (1.0, 0.2, 0.8, 1.0) if seg_data.get('poi') else theme.palette.text_dim)
+                            layout.same_line()
+                            
+                            picking_poi = self._picking and self._pick_target == (i, "poi")
+                            if picking_poi:
+                                if layout.button_styled(f"[Cancel]##{i}_poi_cancel", "error", (70 * scale, 0)):
+                                    self._cancel_picking()
+                            else:
+                                if layout.button(f"Pick##{i}_poi", (50 * scale, 0)):
+                                    self._start_picking(i, "poi")
                     
                     layout.unindent(15 * scale)
                     layout.spacing()
             
-            # Add segment button
+            # Add segment buttons
             layout.spacing()
-            if layout.button("+ Add Segment##add_seg", (-1, 30 * scale)):
-                self._add_segment()
+            layout.label("Add Segment:")
+            if layout.button("+ Linear##add_linear", (100 * scale, 28 * scale)):
+                self._add_segment("linear")
+            layout.same_line()
+            if layout.button("+ Orbit##add_orbit", (100 * scale, 28 * scale)):
+                self._add_segment("orbit")
         
         layout.separator()
         
@@ -793,6 +1075,11 @@ class LinearPathPanel(Panel):
             changed, self._export_frames = layout.checkbox("Export as PNG frames##exportframes", self._export_frames)
             if layout.is_item_hovered():
                 layout.set_tooltip("Export individual PNG frames instead of MP4 video")
+            
+            # Hardware encoding
+            changed, self._use_hardware_encoding = layout.checkbox("Hardware Encoding (GPU)##hwenc", self._use_hardware_encoding)
+            if layout.is_item_hovered():
+                layout.set_tooltip("Use GPU for faster video encoding (NVIDIA/AMD/Intel). Falls back to software if unavailable.")
             
             # Display estimated info
             path = self._get_path()

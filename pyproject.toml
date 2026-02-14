@@ -3,8 +3,8 @@
 
 [project]
 name = "360_record"
-version = "1.1.0"
-description = "Record camera path videos - circular orbits and linear walkthrough paths"
+version = "2.0.0"
+description = "Record camera path videos - mix linear and orbital segments in one path"
 author = "Jacob van Beets"
 min_lichtfeld_version = "0.5.0"
 
