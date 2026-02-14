@@ -531,6 +531,167 @@ class LinearPathPanel(Panel):
         _linear_path_state['highlight_time'] = time.time()
         lf.ui.request_redraw()
     
+    def _browse_save_file(self, title: str, default_path: str, filetypes: list) -> Optional[str]:
+        """Open a save file dialog. Cross-platform (Windows/Linux).
+        
+        Args:
+            title: Dialog title
+            default_path: Default file path
+            filetypes: List of (description, pattern) tuples, e.g. [("JSON", "*.json")]
+        
+        Returns:
+            Selected path or None if cancelled
+        """
+        import sys
+        import subprocess
+        
+        try:
+            if sys.platform == 'win32':
+                # Windows: use PowerShell for native dialog
+                initial_dir = os.path.dirname(default_path) if default_path else os.path.expanduser("~")
+                initial_file = os.path.basename(default_path) if default_path else ""
+                
+                # Build filter string for PowerShell
+                filter_parts = []
+                for desc, pattern in filetypes:
+                    filter_parts.append(f"{desc} ({pattern})|{pattern}")
+                filter_str = "|".join(filter_parts)
+                
+                ps_script = f'''
+                Add-Type -AssemblyName System.Windows.Forms
+                $dialog = New-Object System.Windows.Forms.SaveFileDialog
+                $dialog.Title = "{title}"
+                $dialog.InitialDirectory = "{initial_dir.replace(chr(92), chr(92)+chr(92))}"
+                $dialog.FileName = "{initial_file}"
+                $dialog.Filter = "{filter_str}"
+                if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+                    Write-Output $dialog.FileName
+                }}
+                '''
+                
+                result = subprocess.run(
+                    ['powershell', '-NoProfile', '-Command', ps_script],
+                    capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                path = result.stdout.strip()
+                return path if path else None
+            else:
+                # Linux: try zenity or kdialog
+                initial_dir = os.path.dirname(default_path) if default_path else os.path.expanduser("~")
+                initial_file = os.path.basename(default_path) if default_path else "untitled"
+                
+                # Try zenity first
+                try:
+                    result = subprocess.run(
+                        ['zenity', '--file-selection', '--save', '--confirm-overwrite',
+                         '--title', title, '--filename', os.path.join(initial_dir, initial_file)],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode == 0:
+                        return result.stdout.strip()
+                    return None
+                except FileNotFoundError:
+                    pass
+                
+                # Try kdialog
+                try:
+                    result = subprocess.run(
+                        ['kdialog', '--getsavefilename', os.path.join(initial_dir, initial_file), filetypes[0][1] if filetypes else '*'],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode == 0:
+                        return result.stdout.strip()
+                    return None
+                except FileNotFoundError:
+                    self._status_msg = "No file dialog available (install zenity or kdialog)"
+                    self._status_is_error = True
+                    return None
+                    
+        except Exception as e:
+            self._status_msg = f"File dialog error: {str(e)}"
+            self._status_is_error = True
+            return None
+    
+    def _browse_open_file(self, title: str, default_path: str, filetypes: list) -> Optional[str]:
+        """Open a file open dialog. Cross-platform (Windows/Linux).
+        
+        Args:
+            title: Dialog title
+            default_path: Default file path
+            filetypes: List of (description, pattern) tuples, e.g. [("JSON", "*.json")]
+        
+        Returns:
+            Selected path or None if cancelled
+        """
+        import sys
+        import subprocess
+        
+        try:
+            if sys.platform == 'win32':
+                # Windows: use PowerShell for native dialog
+                initial_dir = os.path.dirname(default_path) if default_path else os.path.expanduser("~")
+                
+                # Build filter string for PowerShell
+                filter_parts = []
+                for desc, pattern in filetypes:
+                    filter_parts.append(f"{desc} ({pattern})|{pattern}")
+                filter_str = "|".join(filter_parts)
+                
+                ps_script = f'''
+                Add-Type -AssemblyName System.Windows.Forms
+                $dialog = New-Object System.Windows.Forms.OpenFileDialog
+                $dialog.Title = "{title}"
+                $dialog.InitialDirectory = "{initial_dir.replace(chr(92), chr(92)+chr(92))}"
+                $dialog.Filter = "{filter_str}"
+                if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+                    Write-Output $dialog.FileName
+                }}
+                '''
+                
+                result = subprocess.run(
+                    ['powershell', '-NoProfile', '-Command', ps_script],
+                    capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                path = result.stdout.strip()
+                return path if path else None
+            else:
+                # Linux: try zenity or kdialog
+                initial_dir = os.path.dirname(default_path) if default_path else os.path.expanduser("~")
+                
+                # Build file filter for zenity
+                file_filter = []
+                for desc, pattern in filetypes:
+                    file_filter.extend(['--file-filter', f"{desc} | {pattern}"])
+                
+                # Try zenity first
+                try:
+                    cmd = ['zenity', '--file-selection', '--title', title, '--filename', initial_dir + '/'] + file_filter
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode == 0:
+                        return result.stdout.strip()
+                    return None
+                except FileNotFoundError:
+                    pass
+                
+                # Try kdialog
+                try:
+                    result = subprocess.run(
+                        ['kdialog', '--getopenfilename', initial_dir, filetypes[0][1] if filetypes else '*'],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode == 0:
+                        return result.stdout.strip()
+                    return None
+                except FileNotFoundError:
+                    self._status_msg = "No file dialog available (install zenity or kdialog)"
+                    self._status_is_error = True
+                    return None
+                    
+        except Exception as e:
+            self._status_msg = f"File dialog error: {str(e)}"
+            self._status_is_error = True
+            return None
+    
     def _get_default_track_path(self) -> str:
         """Get default track save path."""
         try:
@@ -1199,7 +1360,10 @@ class LinearPathPanel(Panel):
             layout.pop_item_width()
             layout.same_line()
             if layout.button("...##browse", (50 * scale, 0)):
-                pass  # TODO: File browser
+                filetypes = [("MP4 Video", "*.mp4"), ("All Files", "*.*")]
+                path = self._browse_save_file("Save Video", self._output_path, filetypes)
+                if path:
+                    self._output_path = path
             
             # Export as frames
             changed, self._export_frames = layout.checkbox("Export as PNG frames##exportframes", self._export_frames)
@@ -1230,9 +1394,16 @@ class LinearPathPanel(Panel):
                 self._track_path = self._get_default_track_path()
             
             layout.label("Track File:")
-            layout.push_item_width(-1)
+            layout.push_item_width(-60 * scale)
             changed, self._track_path = layout.input_text("##trackpath", self._track_path)
             layout.pop_item_width()
+            layout.same_line()
+            if layout.button("...##browsetrack", (50 * scale, 0)):
+                # Show open dialog to browse for existing track files
+                filetypes = [("Camera Track", "*.json"), ("All Files", "*.*")]
+                path = self._browse_open_file("Open Camera Track", self._track_path, filetypes)
+                if path:
+                    self._track_path = path
             
             layout.spacing()
             
@@ -1241,26 +1412,32 @@ class LinearPathPanel(Panel):
             
             has_segments = len(self._segments) > 0
             if has_segments:
-                if layout.button_styled("Save Track##save", "secondary", (btn_width, 32 * scale)):
-                    success, msg = self._save_track(self._track_path)
-                    self._status_msg = msg
-                    self._status_is_error = not success
+                if layout.button_styled("Save##save", "secondary", (btn_width, 32 * scale)):
+                    # Allow saving to new location via dialog
+                    filetypes = [("Camera Track", "*.json"), ("All Files", "*.*")]
+                    path = self._browse_save_file("Save Camera Track", self._track_path, filetypes)
+                    if path:
+                        self._track_path = path
+                        success, msg = self._save_track(self._track_path)
+                        self._status_msg = msg
+                        self._status_is_error = not success
             else:
-                layout.button("Save Track##save_disabled", (btn_width, 32 * scale))
+                layout.button("Save##save_disabled", (btn_width, 32 * scale))
             
             layout.same_line()
             
-            file_exists = os.path.exists(self._track_path)
-            if file_exists:
-                if layout.button_styled("Load Track##load", "secondary", (btn_width, 32 * scale)):
+            if layout.button_styled("Load##load", "secondary", (btn_width, 32 * scale)):
+                # Always show dialog to pick file to load
+                filetypes = [("Camera Track", "*.json"), ("All Files", "*.*")]
+                path = self._browse_open_file("Load Camera Track", self._track_path, filetypes)
+                if path:
+                    self._track_path = path
                     success, msg = self._load_track(self._track_path)
                     self._status_msg = msg
                     self._status_is_error = not success
-            else:
-                layout.button("Load Track##load_disabled", (btn_width, 32 * scale))
             
-            if not has_segments and not file_exists:
-                layout.text_colored("Add segments to save, or enter path to load", theme.palette.text_dim)
+            if not has_segments:
+                layout.text_colored("Add segments to enable Save", theme.palette.text_dim)
         
         layout.separator()
         
