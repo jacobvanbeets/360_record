@@ -3,5 +3,6 @@
 """Operators for 360 record plugin."""
 
 from .point_picker import LINEARPATH_OT_pick_point
+from .path_preview import PATHPREVIEW_OT_preview
 
-__all__ = ["LINEARPATH_OT_pick_point"]
+__all__ = ["LINEARPATH_OT_pick_point", "PATHPREVIEW_OT_preview"]

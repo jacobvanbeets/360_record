@@ -32,6 +32,12 @@ Create complex camera paths by combining **Linear** and **Orbit** segments in an
 - **Smoothing factor** for corner transitions
 - **Camera up axis** selection (X, Y, or Z)
 
+### Save/Load Tracks
+- **Save** your camera path configuration to a JSON file
+- **Load** previously saved tracks to continue editing or re-record
+- Default save location: `<scene_name>_track.json` in your scene folder
+- Human-readable format for easy backup and sharing
+
 ### Recording Options
 - **Resolution presets**: 720p, 1080p, 1440p, 4K, Square
 - Adjustable **FPS** (1-120)

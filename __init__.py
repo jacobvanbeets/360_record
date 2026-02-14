@@ -9,8 +9,9 @@ import lichtfeld as lf
 
 from .panels.linear_path_panel import LinearPathPanel
 from .operators.point_picker import LINEARPATH_OT_pick_point
+from .operators.path_preview import PATHPREVIEW_OT_preview
 
-_classes = [LinearPathPanel, LINEARPATH_OT_pick_point]
+_classes = [LinearPathPanel, LINEARPATH_OT_pick_point, PATHPREVIEW_OT_preview]
 
 
 def on_load():

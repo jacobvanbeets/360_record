@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Linear Path Panel for multi-segment camera path recording."""
 
+import json
 import os
 import threading
 from typing import Optional, List, Dict, Any
@@ -13,6 +14,7 @@ from lfs_plugins.types import Panel
 from ..core.linear_path import LinearPath, LineSegment, OrbitSegment, compute_linear_camera_position
 from ..core.recorder import RecordingSettings, get_default_output_path, record_linear_video, record_linear_frames_to_folder
 from ..operators.point_picker import set_point_callback, clear_point_callback, was_point_cancelled
+from ..operators.path_preview import start_preview, stop_preview, is_preview_active, get_preview_progress
 
 
 # Module-level state for draw handler
@@ -324,6 +326,10 @@ class LinearPathPanel(Panel):
         
         # Preview
         self._show_preview = True
+        self._preview_speed = 1.0  # Preview speed multiplier
+        
+        # Track file
+        self._track_path = ""
         
         # State
         self._status_msg = ""
@@ -524,6 +530,88 @@ class LinearPathPanel(Panel):
         _linear_path_state['highlighted_segment'] = idx
         _linear_path_state['highlight_time'] = time.time()
         lf.ui.request_redraw()
+    
+    def _get_default_track_path(self) -> str:
+        """Get default track save path."""
+        try:
+            scene_path = lf.get_scene_path()
+            if scene_path:
+                base = os.path.splitext(scene_path)[0]
+                return base + "_track.json"
+        except:
+            pass
+        return os.path.join(os.path.expanduser("~"), "camera_track.json")
+    
+    def _save_track(self, path: str) -> tuple:
+        """Save current track to JSON file.
+        
+        Returns:
+            (success, message) tuple
+        """
+        if not self._segments:
+            return False, "No segments to save"
+        
+        try:
+            data = {
+                'version': 1,
+                'segments': self._segments,
+                'settings': {
+                    'speed': self._speed,
+                    'smooth_factor': self._smooth_factor,
+                    'elevation': self._elevation,
+                    'up_axis_idx': self._up_axis_idx,
+                    'invert_elevation': self._invert_elevation,
+                    'resolution_idx': self._resolution_idx,
+                    'fps': self._fps,
+                    'fov': self._fov,
+                    'preview_speed': self._preview_speed,
+                }
+            }
+            
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            return True, f"Track saved to {os.path.basename(path)}"
+        except Exception as e:
+            return False, f"Save failed: {str(e)}"
+    
+    def _load_track(self, path: str) -> tuple:
+        """Load track from JSON file.
+        
+        Returns:
+            (success, message) tuple
+        """
+        if not os.path.exists(path):
+            return False, "File not found"
+        
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            
+            # Load segments
+            self._segments = data.get('segments', [])
+            self._expanded_segments = {}  # Reset expanded state
+            
+            # Load settings
+            settings = data.get('settings', {})
+            self._speed = settings.get('speed', 1.0)
+            self._smooth_factor = settings.get('smooth_factor', 0.5)
+            self._elevation = settings.get('elevation', 1.5)
+            self._up_axis_idx = settings.get('up_axis_idx', 0)
+            self._invert_elevation = settings.get('invert_elevation', False)
+            self._resolution_idx = settings.get('resolution_idx', 0)
+            self._fps = settings.get('fps', 30.0)
+            self._fov = settings.get('fov', 60.0)
+            self._preview_speed = settings.get('preview_speed', 1.0)
+            
+            self._update_draw_state()
+            lf.ui.request_redraw()
+            
+            return True, f"Loaded {len(self._segments)} segments"
+        except json.JSONDecodeError:
+            return False, "Invalid JSON file"
+        except Exception as e:
+            return False, f"Load failed: {str(e)}"
     
     def _get_path(self) -> Optional[LinearPath]:
         """Get the current linear path configuration."""
@@ -1020,13 +1108,55 @@ class LinearPathPanel(Panel):
                 self._update_draw_state()
                 lf.ui.request_redraw()
             
-            layout.text_colored(
-                "Path visualization shown in viewport",
-                theme.palette.text_dim
-            )
+            # Live preview controls
+            path = self._get_path()
+            can_preview = path is not None and len(path.segments) > 0 and not self._picking and not self._recording
+            
+            layout.spacing()
+            
+            if is_preview_active():
+                # Show progress and stop button
+                progress = get_preview_progress()
+                layout.progress_bar(progress, f"Preview: {progress * 100:.0f}%", -1, 24 * scale)
+                
+                if layout.button_styled("STOP PREVIEW (Esc)##stoppreview", "error", (-1, 32 * scale)):
+                    stop_preview()
+                
+                layout.text_colored("Press ESC or Right-click to cancel", theme.palette.text_dim)
+                lf.ui.request_redraw()  # Keep updating progress
+            else:
+                # Preview speed
+                layout.label("Preview Speed:")
+                layout.same_line()
+                speed_labels = ["0.5x", "1x", "2x", "4x"]
+                speed_values = [0.5, 1.0, 2.0, 4.0]
+                current_speed_idx = 1  # Default 1x
+                for idx, val in enumerate(speed_values):
+                    if abs(self._preview_speed - val) < 0.01:
+                        current_speed_idx = idx
+                        break
+                
+                layout.push_item_width(80 * scale)
+                changed, new_speed_idx = layout.combo("##previewspeed", current_speed_idx, speed_labels)
+                if changed:
+                    self._preview_speed = speed_values[new_speed_idx]
+                layout.pop_item_width()
+                
+                if can_preview:
+                    if layout.button_styled("PREVIEW PATH##startpreview", "secondary", (-1, 32 * scale)):
+                        start_preview(path, self._fov, self._preview_speed)
+                    layout.text_colored(
+                        "Note: Requires LFS camera control API (not yet available)",
+                        (1.0, 0.7, 0.3, 0.8)
+                    )
+                else:
+                    layout.button("PREVIEW PATH##preview_disabled", (-1, 32 * scale))
+                    if not path or len(path.segments) == 0:
+                        layout.text_colored("Add complete segments to preview", theme.palette.text_dim)
+            
+            layout.spacing()
             
             # Show path info
-            path = self._get_path()
             if path:
                 total_dist = path.get_total_distance()
                 total_dur = path.get_total_duration()
@@ -1090,6 +1220,47 @@ class LinearPathPanel(Panel):
                     f"Duration: {duration:.1f}s | Frames: {total_frames}",
                     theme.palette.text_dim
                 )
+        
+        layout.separator()
+        
+        # === Save/Load Track Section ===
+        if layout.collapsing_header("Save/Load Track", default_open=False):
+            # Track file path
+            if not self._track_path:
+                self._track_path = self._get_default_track_path()
+            
+            layout.label("Track File:")
+            layout.push_item_width(-1)
+            changed, self._track_path = layout.input_text("##trackpath", self._track_path)
+            layout.pop_item_width()
+            
+            layout.spacing()
+            
+            # Save/Load buttons side by side
+            btn_width = (layout.get_content_region_avail()[0] - 8 * scale) / 2
+            
+            has_segments = len(self._segments) > 0
+            if has_segments:
+                if layout.button_styled("Save Track##save", "secondary", (btn_width, 32 * scale)):
+                    success, msg = self._save_track(self._track_path)
+                    self._status_msg = msg
+                    self._status_is_error = not success
+            else:
+                layout.button("Save Track##save_disabled", (btn_width, 32 * scale))
+            
+            layout.same_line()
+            
+            file_exists = os.path.exists(self._track_path)
+            if file_exists:
+                if layout.button_styled("Load Track##load", "secondary", (btn_width, 32 * scale)):
+                    success, msg = self._load_track(self._track_path)
+                    self._status_msg = msg
+                    self._status_is_error = not success
+            else:
+                layout.button("Load Track##load_disabled", (btn_width, 32 * scale))
+            
+            if not has_segments and not file_exists:
+                layout.text_colored("Add segments to save, or enter path to load", theme.palette.text_dim)
         
         layout.separator()
         
