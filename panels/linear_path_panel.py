@@ -26,6 +26,7 @@ _linear_path_state = {
     'elevation': 1.5,
     'up_axis': 'z',
     'invert_elevation': False,
+    'speed': 1.0,  # Travel speed for linear segments
     'highlighted_segment': -1,  # Index of segment to highlight, -1 = none
     'highlight_time': 0.0,  # Time when highlight started
 }
@@ -204,9 +205,11 @@ def _linear_path_draw_handler(ctx):
     up_axis = _linear_path_state.get('up_axis', 'z')
     invert_elevation = _linear_path_state.get('invert_elevation', False)
     smooth_factor = _linear_path_state.get('smooth_factor', 0.5)
+    speed = _linear_path_state.get('speed', 1.0)
     
     # Build path for smooth visualization
     path = LinearPath(
+        speed=speed,
         smooth_factor=smooth_factor,
         elevation=elevation,
         up_axis=up_axis,
@@ -353,12 +356,26 @@ class LinearPathPanel(Panel):
             seg_idx, point_type = self._pick_target
             
             if seg_idx < len(self._segments):
+                current_seg = self._segments[seg_idx]
+                
                 if point_type == "start":
-                    self._segments[seg_idx]['start'] = _pending_point
+                    current_seg['start'] = _pending_point
+                    # Update previous segment's end point if it's a linear segment
+                    if seg_idx > 0:
+                        prev_seg = self._segments[seg_idx - 1]
+                        if prev_seg.get('type', 'linear') == 'linear':
+                            prev_seg['end'] = _pending_point
+                            
                 elif point_type == "end":
-                    self._segments[seg_idx]['end'] = _pending_point
+                    current_seg['end'] = _pending_point
+                    # Update next segment's start point if it's a linear segment
+                    if seg_idx < len(self._segments) - 1:
+                        next_seg = self._segments[seg_idx + 1]
+                        if next_seg.get('type', 'linear') == 'linear':
+                            next_seg['start'] = _pending_point
+                            
                 elif point_type == "poi":
-                    self._segments[seg_idx]['poi'] = _pending_point
+                    current_seg['poi'] = _pending_point
                 
                 self._status_msg = f"Point set: ({_pending_point[0]:.2f}, {_pending_point[1]:.2f}, {_pending_point[2]:.2f})"
                 self._status_is_error = False
@@ -523,6 +540,7 @@ class LinearPathPanel(Panel):
         _linear_path_state['elevation'] = self._elevation
         _linear_path_state['up_axis'] = self.UP_AXIS_ITEMS[self._up_axis_idx][0]
         _linear_path_state['invert_elevation'] = self._invert_elevation
+        _linear_path_state['speed'] = self._speed
     
     def _highlight_segment(self, idx: int):
         """Highlight a segment in the 3D view with a pulsing effect."""

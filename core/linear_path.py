@@ -262,7 +262,7 @@ class LinearPath:
     up_axis: str = "z"  # 'z', 'x', or 'y'
     invert_elevation: bool = False
     _timeline_cache: List[Tuple[float, str, int]] = field(default_factory=list, repr=False)
-    _timeline_cache_seg_count: int = field(default=0, repr=False)
+    _timeline_cache_hash: int = field(default=0, repr=False)  # Hash of segment data for cache invalidation
     
     def _get_segment_duration(self, segment: Segment) -> float:
         """Get duration for a segment in seconds."""
@@ -288,6 +288,16 @@ class LinearPath:
         distance = np.linalg.norm(to_start - from_end)
         return distance / self.speed
     
+    def _compute_cache_hash(self) -> int:
+        """Compute a hash of segment data for cache invalidation."""
+        hash_data = [len(self.segments), self.speed]
+        for seg in self.segments:
+            if isinstance(seg, OrbitSegment):
+                hash_data.extend([seg.poi, seg.radius, seg.arc_degrees, seg.duration])
+            else:
+                hash_data.extend([seg.start_point, seg.end_point])
+        return hash(tuple(str(x) for x in hash_data))
+    
     def _get_cumulative_durations(self) -> List[Tuple[float, str, int]]:
         """Get cumulative durations with segment/transition markers (cached).
         
@@ -295,8 +305,11 @@ class LinearPath:
         - type is 'segment' or 'transition'
         - index is segment index (for 'segment') or from-segment index (for 'transition')
         """
-        # Return cached if valid (invalidate if segment count changed)
-        if self._timeline_cache and self._timeline_cache_seg_count == len(self.segments):
+        # Compute hash of segment data to detect content changes
+        current_hash = self._compute_cache_hash()
+        
+        # Return cached if valid (invalidate if segment data changed)
+        if self._timeline_cache and self._timeline_cache_hash == current_hash:
             return self._timeline_cache
         
         if not self.segments:
@@ -318,7 +331,7 @@ class LinearPath:
         
         timeline.append((cumulative, 'end', len(self.segments) - 1))
         self._timeline_cache = timeline
-        self._timeline_cache_seg_count = len(self.segments)
+        self._timeline_cache_hash = current_hash
         return timeline
     
     def get_total_distance(self) -> float:
