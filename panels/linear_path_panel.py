@@ -180,6 +180,8 @@ def _linear_path_draw_handler(ctx):
                 if start and end:
                     mid = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2, (start[2] + end[2]) / 2)
                     ctx.draw_line_3d(mid, poi, (poi_color[0], poi_color[1], poi_color[2], 0.4), 1.0)
+            
+            # Note: Angled look direction is drawn from the smooth camera path below
         
         # Draw transition to next segment
         if i < len(segments) - 1:
@@ -234,7 +236,9 @@ def _linear_path_draw_handler(ctx):
                 start_point=seg_data['start'],
                 end_point=seg_data['end'],
                 look_mode=seg_data.get('look_mode', 'forward'),
-                poi=seg_data.get('poi')
+                poi=seg_data.get('poi'),
+                look_angle_h=seg_data.get('look_angle_h', 0.0),
+                look_angle_v=seg_data.get('look_angle_v', 0.0)
             ))
     
     if path.segments:
@@ -249,6 +253,119 @@ def _linear_path_draw_handler(ctx):
                 if prev_pos is not None:
                     ctx.draw_line_3d(prev_pos, pos, smooth_color, 1.5)
                 prev_pos = pos
+            
+            # Draw angled look direction indicators from actual camera path
+            for seg_idx, seg_data in enumerate(segments):
+                if seg_data.get('type', 'linear') == 'linear' and seg_data.get('look_mode') == 'angled':
+                    angle_h = seg_data.get('look_angle_h', 0.0)
+                    angle_v = seg_data.get('look_angle_v', 0.0)
+                    start = seg_data.get('start')
+                    end = seg_data.get('end')
+                    
+                    if start and end:
+                        # Get segment length for line scaling
+                        dx = end[0] - start[0]
+                        dy = end[1] - start[1]
+                        dz = end[2] - start[2]
+                        seg_length = _math.sqrt(dx*dx + dy*dy + dz*dz)
+                        
+                        # Sample a point in the middle of this segment's time
+                        # Find approximate time for this segment
+                        seg_start_t = 0.0
+                        for j in range(seg_idx):
+                            s = segments[j]
+                            if s.get('type') == 'orbit' and s.get('poi'):
+                                seg_start_t += s.get('duration', 30.0)
+                            elif s.get('start') and s.get('end'):
+                                sx, sy, sz = s['start']
+                                ex, ey, ez = s['end']
+                                seg_start_t += _math.sqrt((ex-sx)**2 + (ey-sy)**2 + (ez-sz)**2) / speed
+                        
+                        seg_dur = seg_length / speed
+                        mid_t = seg_start_t + seg_dur * 0.5
+                        
+                        if mid_t <= total_dur:
+                            # Get actual camera position on smooth path
+                            cam_pos = path.get_camera_position(mid_t)
+                            
+                            # Compute forward direction from segment
+                            forward = (dx/seg_length, dy/seg_length, dz/seg_length) if seg_length > 1e-6 else (1,0,0)
+                            
+                            # Get up vector
+                            if up_axis == 'z':
+                                world_up = (0.0, 0.0, 1.0)
+                            elif up_axis == 'y':
+                                world_up = (0.0, 1.0, 0.0)
+                            else:
+                                world_up = (1.0, 0.0, 0.0)
+                            
+                            # Compute right vector (cross product)
+                            right = (
+                                forward[1] * world_up[2] - forward[2] * world_up[1],
+                                forward[2] * world_up[0] - forward[0] * world_up[2],
+                                forward[0] * world_up[1] - forward[1] * world_up[0]
+                            )
+                            right_len = _math.sqrt(right[0]**2 + right[1]**2 + right[2]**2)
+                            if right_len > 1e-6:
+                                right = (right[0]/right_len, right[1]/right_len, right[2]/right_len)
+                                
+                                # Compute proper up
+                                up_vec = (
+                                    right[1] * forward[2] - right[2] * forward[1],
+                                    right[2] * forward[0] - right[0] * forward[2],
+                                    right[0] * forward[1] - right[1] * forward[0]
+                                )
+                                
+                                # Rotate forward by angles
+                                angle_h_rad = _math.radians(angle_h)
+                                angle_v_rad = _math.radians(angle_v)
+                                
+                                # Horizontal rotation around up axis
+                                cos_h = _math.cos(angle_h_rad)
+                                sin_h = _math.sin(angle_h_rad)
+                                look_dir = (
+                                    forward[0] * cos_h + right[0] * sin_h,
+                                    forward[1] * cos_h + right[1] * sin_h,
+                                    forward[2] * cos_h + right[2] * sin_h
+                                )
+                                
+                                # Also rotate right axis by horizontal angle
+                                rotated_right = (
+                                    right[0] * cos_h + forward[0] * (-sin_h),
+                                    right[1] * cos_h + forward[1] * (-sin_h),
+                                    right[2] * cos_h + forward[2] * (-sin_h)
+                                )
+                                
+                                # Vertical rotation around the rotated right axis
+                                # Using Rodrigues' formula: v' = v*cos + (axis x v)*sin + axis*(axis.v)*(1-cos)
+                                cos_v = _math.cos(angle_v_rad)
+                                sin_v = _math.sin(angle_v_rad)
+                                # Cross product: rotated_right x look_dir
+                                cross = (
+                                    rotated_right[1] * look_dir[2] - rotated_right[2] * look_dir[1],
+                                    rotated_right[2] * look_dir[0] - rotated_right[0] * look_dir[2],
+                                    rotated_right[0] * look_dir[1] - rotated_right[1] * look_dir[0]
+                                )
+                                # Dot product: rotated_right . look_dir
+                                dot = rotated_right[0]*look_dir[0] + rotated_right[1]*look_dir[1] + rotated_right[2]*look_dir[2]
+                                look_dir = (
+                                    look_dir[0] * cos_v + cross[0] * sin_v + rotated_right[0] * dot * (1 - cos_v),
+                                    look_dir[1] * cos_v + cross[1] * sin_v + rotated_right[1] * dot * (1 - cos_v),
+                                    look_dir[2] * cos_v + cross[2] * sin_v + rotated_right[2] * dot * (1 - cos_v)
+                                )
+                                
+                                # Draw look direction line from camera position
+                                line_length = max(seg_length * 0.5, 3.0)
+                                look_end = (
+                                    cam_pos[0] + look_dir[0] * line_length,
+                                    cam_pos[1] + look_dir[1] * line_length,
+                                    cam_pos[2] + look_dir[2] * line_length
+                                )
+                                
+                                # Yellow line for look direction
+                                look_color = (1.0, 0.9, 0.2, 0.9)
+                                ctx.draw_line_3d(cam_pos, look_end, look_color, 2.5)
+                                ctx.draw_point_3d(look_end, look_color, 10.0)
 
 
 def _ensure_linear_draw_handler():
@@ -280,6 +397,7 @@ class LinearPathPanel(Panel):
     
     LOOK_MODE_ITEMS = [
         ("forward", "Look Forward"),
+        ("angled", "Look Angled"),
         ("poi", "Look at POI"),
     ]
     
@@ -831,7 +949,9 @@ class LinearPathPanel(Panel):
                         start_point=seg_data['start'],
                         end_point=seg_data['end'],
                         look_mode=seg_data.get('look_mode', 'forward'),
-                        poi=seg_data.get('poi')
+                        poi=seg_data.get('poi'),
+                        look_angle_h=seg_data.get('look_angle_h', 0.0),
+                        look_angle_v=seg_data.get('look_angle_v', 0.0)
                     )
                     path.segments.append(segment)
         
@@ -1130,6 +1250,38 @@ class LinearPathPanel(Panel):
                             seg_data['look_mode'] = self.LOOK_MODE_ITEMS[new_look_idx][0]
                             self._update_draw_state()
                         layout.pop_item_width()
+                        
+                        # Angle controls (only if look_mode is "angled")
+                        if seg_data.get('look_mode') == 'angled':
+                            # Horizontal angle (left/right)
+                            layout.label("Horizontal (L/R):")
+                            layout.push_item_width(-1)
+                            changed, new_angle_h = layout.slider_float(
+                                f"##look_angle_h_{i}", 
+                                seg_data.get('look_angle_h', 0.0), 
+                                -180.0, 180.0
+                            )
+                            if changed:
+                                seg_data['look_angle_h'] = new_angle_h
+                                self._update_draw_state()
+                            layout.pop_item_width()
+                            if layout.is_item_hovered():
+                                layout.set_tooltip("Negative = look left, Positive = look right")
+                            
+                            # Vertical angle (up/down)
+                            layout.label("Vertical (Up/Dn):")
+                            layout.push_item_width(-1)
+                            changed, new_angle_v = layout.slider_float(
+                                f"##look_angle_v_{i}", 
+                                seg_data.get('look_angle_v', 0.0), 
+                                -90.0, 90.0
+                            )
+                            if changed:
+                                seg_data['look_angle_v'] = new_angle_v
+                                self._update_draw_state()
+                            layout.pop_item_width()
+                            if layout.is_item_hovered():
+                                layout.set_tooltip("Negative = look down, Positive = look up")
                         
                         # POI (only if look_mode is "poi")
                         if seg_data.get('look_mode') == 'poi':

@@ -15,13 +15,18 @@ class LineSegment:
     Attributes:
         start_point: Starting position (x, y, z)
         end_point: Ending position (x, y, z)
-        look_mode: "forward" to look along travel direction, "poi" to look at a point
+        look_mode: "forward" to look along travel direction, "poi" to look at a point,
+                   "angled" to look at an offset angle from forward
         poi: Point of interest when look_mode="poi"
+        look_angle_h: Horizontal angle offset in degrees (negative=left, positive=right)
+        look_angle_v: Vertical angle offset in degrees (negative=down, positive=up)
     """
     start_point: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     end_point: Tuple[float, float, float] = (1.0, 0.0, 0.0)
-    look_mode: str = "forward"  # "forward" or "poi"
+    look_mode: str = "forward"  # "forward", "poi", or "angled"
     poi: Optional[Tuple[float, float, float]] = None
+    look_angle_h: float = 0.0  # Horizontal offset in degrees (yaw: -=left, +=right)
+    look_angle_v: float = 0.0  # Vertical offset in degrees (pitch: -=down, +=up)
     segment_type: str = "linear"  # Always "linear" for LineSegment
     
     def get_length(self) -> float:
@@ -524,6 +529,24 @@ class LinearPath:
         result = base_pos + elevation_offset
         return tuple(result)
     
+    def _rotate_vector_around_axis(self, vec: np.ndarray, axis: np.ndarray, angle_deg: float) -> np.ndarray:
+        """Rotate a vector around an axis by the given angle (Rodrigues' rotation formula).
+        
+        Args:
+            vec: Vector to rotate
+            axis: Axis to rotate around (must be normalized)
+            angle_deg: Angle in degrees
+            
+        Returns:
+            Rotated vector
+        """
+        angle_rad = math.radians(angle_deg)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+        
+        # Rodrigues' rotation formula: v_rot = v*cos(a) + (k x v)*sin(a) + k*(k.v)*(1-cos(a))
+        return vec * cos_a + np.cross(axis, vec) * sin_a + axis * np.dot(axis, vec) * (1 - cos_a)
+    
     def _get_segment_look_direction(self, seg_idx: int, pos: np.ndarray, local_t: float = 0.5) -> np.ndarray:
         """Get the look direction for a segment.
         
@@ -546,6 +569,38 @@ class LinearPath:
         elif hasattr(segment, 'look_mode') and segment.look_mode == "poi" and segment.poi is not None:
             # Linear segment with POI look mode
             direction = np.array(segment.poi) - pos
+        elif hasattr(segment, 'look_mode') and segment.look_mode == "angled":
+            # Linear segment with angled look mode - rotate forward direction by h/v angles
+            forward = np.array(segment.get_direction())
+            
+            # Get world up vector
+            world_up = self._get_world_up()
+            
+            # Compute right vector (perpendicular to forward and up)
+            right = np.cross(forward, world_up)
+            right_norm = np.linalg.norm(right)
+            if right_norm < 1e-6:
+                # Forward is parallel to up, use alternate
+                right = np.array([1.0, 0.0, 0.0]) if abs(forward[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+            else:
+                right = right / right_norm
+            
+            # Recompute proper up vector
+            up = np.cross(right, forward)
+            up = up / (np.linalg.norm(up) + 1e-8)
+            
+            # Get angle offsets
+            angle_h = getattr(segment, 'look_angle_h', 0.0)
+            angle_v = getattr(segment, 'look_angle_v', 0.0)
+            
+            # Rotate forward by horizontal angle (yaw) around up axis (negate so positive = right)
+            direction = self._rotate_vector_around_axis(forward, up, -angle_h)
+            
+            # Also rotate the right axis by the same horizontal angle
+            rotated_right = self._rotate_vector_around_axis(right, up, -angle_h)
+            
+            # Rotate by vertical angle (pitch) around the rotated right axis
+            direction = self._rotate_vector_around_axis(direction, rotated_right, angle_v)
         else:
             # Linear segment looking forward
             direction = np.array(segment.get_direction())

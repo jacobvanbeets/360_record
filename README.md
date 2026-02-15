@@ -14,6 +14,7 @@ Create complex camera paths by combining **Linear** and **Orbit** segments in an
 - Pick **start and end points** on your model
 - Per-segment **look mode**:
   - **Look Forward** - Camera looks along travel direction
+  - **Look Angled** - Camera looks at a fixed angle offset from forward (left/right ±180°, up/down ±90°)
   - **Look at POI** - Camera looks at a specific point of interest
 - **Smooth transitions** with Catmull-Rom spline interpolation
 - **Walking Speed** preset (1.4 m/s for realistic walkthroughs)
