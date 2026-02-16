@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Live path preview operator for animating camera along the path."""
+"""Live path preview using draw callback for smooth animation."""
 
 import time
-from typing import Optional, Tuple
 
 import lichtfeld as lf
 from lfs_plugins.types import Operator, Event
@@ -15,6 +14,7 @@ _preview_path = None
 _preview_fov = 60.0
 _preview_start_time = 0.0
 _preview_speed_multiplier = 1.0
+_draw_handler = None
 
 # Original camera state to restore
 _original_camera = None  # (eye, target, up, fov)
@@ -38,6 +38,80 @@ def get_preview_progress() -> float:
     return min(1.0, elapsed / total_dur)
 
 
+def _set_viewport_camera(eye, target, up):
+    """Set the viewport camera position and orientation."""
+    try:
+        lf.set_camera(tuple(eye), tuple(target), tuple(up))
+        return True
+    except Exception as e:
+        lf.log.error(f"360_record: Failed to set camera: {e}")
+        return False
+
+
+def _restore_camera():
+    """Restore the original camera state."""
+    global _original_camera
+    if _original_camera is not None:
+        eye, target, up, fov = _original_camera
+        if eye and target:
+            _set_viewport_camera(eye, target, up or (0, 0, 1))
+            try:
+                lf.set_camera_fov(fov)
+            except:
+                pass
+
+
+def _preview_draw_callback(ctx):
+    """Draw callback that updates camera each frame."""
+    global _preview_active, _preview_path, _preview_start_time, _preview_speed_multiplier
+    
+    if not _preview_active or _preview_path is None:
+        return
+    
+    elapsed = (time.time() - _preview_start_time) * _preview_speed_multiplier
+    total_dur = _preview_path.get_total_duration()
+    
+    if elapsed >= total_dur:
+        # Preview complete
+        _stop_preview_internal()
+        return
+    
+    # Get camera state at current time
+    eye = _preview_path.get_camera_position(elapsed)
+    target = _preview_path.get_camera_target(elapsed)
+    up = _preview_path.get_up_vector(elapsed)
+    
+    # Set the viewport camera
+    _set_viewport_camera(eye, target, up)
+    
+    # Request next frame
+    lf.ui.request_redraw()
+
+
+def _stop_preview_internal():
+    """Internal stop - restore camera and clean up."""
+    global _preview_active, _draw_handler
+    
+    _preview_active = False
+    
+    # Unregister draw handler
+    if _draw_handler:
+        try:
+            lf.remove_draw_handler(_draw_handler)
+        except:
+            pass
+        _draw_handler = None
+    
+    # Restore original camera
+    _restore_camera()
+    
+    # Cancel modal if running
+    try:
+        lf.ui.ops.cancel_modal()
+    except:
+        pass
+
+
 def start_preview(path, fov: float = 60.0, speed_multiplier: float = 1.0):
     """Start the preview with given path and settings.
     
@@ -47,6 +121,7 @@ def start_preview(path, fov: float = 60.0, speed_multiplier: float = 1.0):
         speed_multiplier: Speed multiplier (1.0 = normal, 2.0 = 2x speed)
     """
     global _preview_path, _preview_fov, _preview_speed_multiplier, _original_camera
+    global _preview_active, _preview_start_time, _draw_handler
     
     _preview_path = path
     _preview_fov = fov
@@ -65,101 +140,61 @@ def start_preview(path, fov: float = 60.0, speed_multiplier: float = 1.0):
     except:
         _original_camera = None
     
-    # Invoke the preview operator
+    # Set FOV
+    try:
+        lf.set_camera_fov(fov)
+    except:
+        pass
+    
+    # Start the preview
+    _preview_active = True
+    _preview_start_time = time.time()
+    
+    # Register draw handler for continuous updates
+    try:
+        _draw_handler = "preview_camera_update"
+        lf.add_draw_handler(_draw_handler, _preview_draw_callback, "POST_VIEW")
+    except:
+        _draw_handler = None
+    
+    # Start modal operator for ESC handling
     op_id = "lfs_plugins.360_record.operators.path_preview.PATHPREVIEW_OT_preview"
     lf.ui.ops.invoke(op_id)
+    
+    # Trigger first update
+    lf.ui.request_redraw()
 
 
 def stop_preview():
     """Stop the preview and restore original camera."""
-    global _preview_active
-    _preview_active = False
-    lf.ui.ops.cancel_modal()
-
-
-_api_warning_shown = False
-
-def _set_viewport_camera(eye, target, up):
-    """Attempt to set the viewport camera.
-    
-    Note: LFS currently doesn't have an API to move the viewport camera.
-    lf.look_at() only computes view matrices, it doesn't set the camera.
-    """
-    global _api_warning_shown
-    
-    if not _api_warning_shown:
-        lf.log.warning(
-            "360_record: Live preview requires a camera control API that LFS doesn't currently provide. "
-            "The lf.look_at() function only computes view matrices but doesn't move the viewport camera. "
-            "Please request 'lf.set_camera(eye, target, up)' API from LFS developers."
-        )
-        _api_warning_shown = True
-    
-    return False
-
-
-def restore_camera():
-    """Restore the original camera state."""
-    global _original_camera
-    if _original_camera is not None:
-        eye, target, up, fov = _original_camera
-        if eye and target:
-            _set_viewport_camera(eye, target, up or (0, 0, 1))
+    _stop_preview_internal()
 
 
 class PATHPREVIEW_OT_preview(Operator):
-    """Modal operator for live camera path preview."""
+    """Modal operator for handling ESC to cancel preview."""
     
     label = "Preview Path"
     description = "Animate camera along the path"
     options = {'BLOCKING'}
     
     def invoke(self, context, event: Event) -> set:
-        """Start the preview."""
-        global _preview_active, _preview_start_time
-        _preview_active = True
-        _preview_start_time = time.time()
+        """Start the modal."""
         return {'RUNNING_MODAL'}
     
     def modal(self, context, event: Event) -> set:
-        """Update camera position each frame."""
-        global _preview_active, _preview_path, _preview_fov, _preview_start_time, _preview_speed_multiplier
+        """Handle cancel events."""
+        global _preview_active
         
         if not _preview_active:
-            restore_camera()
-            return {'CANCELLED'}
+            return {'FINISHED'}
         
         # Check for cancel
         if event.type in {'RIGHTMOUSE', 'ESC'}:
-            _preview_active = False
-            restore_camera()
+            _stop_preview_internal()
             return {'CANCELLED'}
-        
-        # Update camera position
-        if _preview_path is not None:
-            elapsed = (time.time() - _preview_start_time) * _preview_speed_multiplier
-            total_dur = _preview_path.get_total_duration()
-            
-            if elapsed >= total_dur:
-                # Preview complete
-                _preview_active = False
-                restore_camera()
-                return {'FINISHED'}
-            
-            # Get camera state at current time
-            eye = _preview_path.get_camera_position(elapsed)
-            target = _preview_path.get_camera_target(elapsed)
-            up = _preview_path.get_up_vector(elapsed)
-            
-            # Set the viewport camera - try multiple possible APIs
-            _set_viewport_camera(eye, target, up)
-            
-            lf.ui.request_redraw()
         
         return {'RUNNING_MODAL'}
     
     def cancel(self, context):
         """Clean up on cancel."""
-        global _preview_active
-        _preview_active = False
-        restore_camera()
+        _stop_preview_internal()

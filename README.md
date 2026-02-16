@@ -56,6 +56,13 @@ Create complex camera paths by combining **Linear** and **Orbit** segments in an
 - Segment transition indicators
 - **Click segment headers** to highlight in 3D view
 
+### Live Path Preview
+- **Preview your camera path** before recording
+- Animates the viewport camera along the entire path
+- Adjustable **preview speed** (0.5x, 1x, 2x, 4x)
+- Press **ESC** or right-click to cancel preview
+- Camera automatically restores to original position after preview
+
 ## Installation
 
 1. Copy the repository URL: `https://github.com/jacobvanbeets/360_record`
@@ -94,6 +101,9 @@ This plugin uses the following LichtFeld Studio APIs:
 - `lf.io.save_image(path, tensor)` - Save image tensor to file
 - `lf.add_draw_handler()` - Viewport visualization
 - `lf.selection.pick_at_screen()` - Point picking
+- `lf.set_camera(eye, target, up)` - Move viewport camera (live preview)
+- `lf.set_camera_fov(fov)` - Set viewport field of view
+- `lf.get_camera()` - Get current camera state
 
 ## License
 

@@ -1476,10 +1476,6 @@ class LinearPathPanel(Panel):
                 if can_preview:
                     if layout.button_styled("PREVIEW PATH##startpreview", "secondary", (-1, 32 * scale)):
                         start_preview(path, self._fov, self._preview_speed)
-                    layout.text_colored(
-                        "Note: Requires LFS camera control API (not yet available)",
-                        (1.0, 0.7, 0.3, 0.8)
-                    )
                 else:
                     layout.button("PREVIEW PATH##preview_disabled", (-1, 32 * scale))
                     if not path or len(path.segments) == 0:
