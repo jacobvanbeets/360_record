@@ -1059,12 +1059,14 @@ class LinearPathPanel(Panel):
         self._update_draw_state()
         
         # === Segments Section ===
+        layout.push_id("path_segments")
         if layout.collapsing_header("Path Segments", default_open=True):
             if not self._segments:
                 layout.text_colored("No segments. Add a Linear or Orbit segment to start.", theme.palette.text_dim)
             
             # Draw each segment
             for i, seg_data in enumerate(self._segments):
+                layout.push_id(f"seg_{i}")
                 is_expanded = self._expanded_segments.get(i, True)
                 seg_type = seg_data.get('type', 'linear')
                 
@@ -1095,7 +1097,8 @@ class LinearPathPanel(Panel):
                 # Delete button
                 if layout.button(f"Del##{i}_del", (32 * scale, 0)):
                     self._remove_segment(i)
-                    continue  # Skip rest of this segment
+                    layout.pop_id()
+                    continue
                 
                 # Segment details (if expanded)
                 if is_expanded:
@@ -1120,70 +1123,52 @@ class LinearPathPanel(Panel):
                                 self._start_picking(i, "poi")
                         
                         # Orbit Axis
-                        layout.label("Orbit Axis:")
                         orbit_axis_labels = [item[1] for item in self.ORBIT_AXIS_ITEMS]
                         current_axis_idx = 0
                         for idx, item in enumerate(self.ORBIT_AXIS_ITEMS):
                             if item[0] == seg_data.get('orbit_axis', 'z'):
                                 current_axis_idx = idx
                                 break
-                        layout.push_item_width(100 * scale)
-                        changed, new_axis_idx = layout.combo(f"##orbit_axis_{i}", current_axis_idx, orbit_axis_labels)
+                        changed, new_axis_idx = layout.combo(f"Orbit Axis##orbit_axis_{i}", current_axis_idx, orbit_axis_labels)
                         if changed:
                             seg_data['orbit_axis'] = self.ORBIT_AXIS_ITEMS[new_axis_idx][0]
                             self._update_draw_state()
-                        layout.pop_item_width()
                         
                         # Radius
-                        layout.label("Radius:")
-                        layout.push_item_width(-1)
-                        changed, new_radius = layout.drag_float(f"##radius_{i}", seg_data.get('radius', 5.0), 0.1, 0.1, 500.0)
+                        changed, new_radius = layout.drag_float(f"Radius##radius_{i}", seg_data.get('radius', 5.0), 0.1, 0.1, 500.0)
                         if changed:
                             seg_data['radius'] = max(0.1, new_radius)
                             self._update_draw_state()
-                        layout.pop_item_width()
                         if layout.is_item_hovered():
                             layout.set_tooltip("Drag or Ctrl+Click to enter value manually")
                         
                         # Elevation (offset along orbit axis)
-                        layout.label("Elevation:")
-                        layout.push_item_width(-1)
-                        changed, new_elev = layout.drag_float(f"##orb_elev_{i}", seg_data.get('elevation', 1.5), 0.1, -500.0, 500.0)
+                        changed, new_elev = layout.drag_float(f"Elevation##orb_elev_{i}", seg_data.get('elevation', 1.5), 0.1, -500.0, 500.0)
                         if changed:
                             seg_data['elevation'] = new_elev
                             self._update_draw_state()
-                        layout.pop_item_width()
                         if layout.is_item_hovered():
                             layout.set_tooltip("Drag or Ctrl+Click to enter value manually")
                         
                         # Start Angle
-                        layout.label("Start Angle:")
-                        layout.push_item_width(-1)
-                        changed, new_start = layout.slider_float(f"##start_angle_{i}", seg_data.get('start_angle', 0.0), 0.0, 360.0)
+                        changed, new_start = layout.slider_float(f"Start Angle##start_angle_{i}", seg_data.get('start_angle', 0.0), 0.0, 360.0)
                         if changed:
                             seg_data['start_angle'] = new_start
                             self._update_draw_state()
-                        layout.pop_item_width()
                         
                         # Arc Degrees
-                        layout.label("Arc Amount (°):")
-                        layout.push_item_width(-1)
-                        changed, new_arc = layout.slider_float(f"##arc_deg_{i}", seg_data.get('arc_degrees', 360.0), -720.0, 720.0)
+                        changed, new_arc = layout.slider_float(f"Arc (deg)##arc_deg_{i}", seg_data.get('arc_degrees', 360.0), -720.0, 720.0)
                         if changed:
                             seg_data['arc_degrees'] = new_arc
                             self._update_draw_state()
-                        layout.pop_item_width()
                         if layout.is_item_hovered():
                             layout.set_tooltip("Positive = counter-clockwise, Negative = clockwise. 360 = full circle.")
                         
                         # Duration
-                        layout.label("Duration (s):")
-                        layout.push_item_width(-1)
-                        changed, new_dur = layout.slider_float(f"##duration_{i}", seg_data.get('duration', 30.0), 1.0, 120.0)
+                        changed, new_dur = layout.slider_float(f"Duration (s)##duration_{i}", seg_data.get('duration', 30.0), 1.0, 120.0)
                         if changed:
                             seg_data['duration'] = new_dur
                             self._update_draw_state()
-                        layout.pop_item_width()
                         
                         # Invert direction
                         changed, new_invert = layout.checkbox(f"Invert Elevation##{i}_invert", seg_data.get('invert_direction', False))
@@ -1236,7 +1221,6 @@ class LinearPathPanel(Panel):
                                 self._start_picking(i, "end")
                         
                         # Look mode
-                        layout.label("Look Mode:")
                         look_mode_labels = [item[1] for item in self.LOOK_MODE_ITEMS]
                         current_look_idx = 0
                         for idx, item in enumerate(self.LOOK_MODE_ITEMS):
@@ -1244,42 +1228,34 @@ class LinearPathPanel(Panel):
                                 current_look_idx = idx
                                 break
                         
-                        layout.push_item_width(150 * scale)
-                        changed, new_look_idx = layout.combo(f"##look_mode_{i}", current_look_idx, look_mode_labels)
+                        changed, new_look_idx = layout.combo(f"Look Mode##look_mode_{i}", current_look_idx, look_mode_labels)
                         if changed:
                             seg_data['look_mode'] = self.LOOK_MODE_ITEMS[new_look_idx][0]
                             self._update_draw_state()
-                        layout.pop_item_width()
                         
                         # Angle controls (only if look_mode is "angled")
                         if seg_data.get('look_mode') == 'angled':
                             # Horizontal angle (left/right)
-                            layout.label("Horizontal (L/R):")
-                            layout.push_item_width(-1)
                             changed, new_angle_h = layout.slider_float(
-                                f"##look_angle_h_{i}", 
+                                f"Horizontal (L/R)##look_angle_h_{i}", 
                                 seg_data.get('look_angle_h', 0.0), 
                                 -180.0, 180.0
                             )
                             if changed:
                                 seg_data['look_angle_h'] = new_angle_h
                                 self._update_draw_state()
-                            layout.pop_item_width()
                             if layout.is_item_hovered():
                                 layout.set_tooltip("Negative = look left, Positive = look right")
                             
                             # Vertical angle (up/down)
-                            layout.label("Vertical (Up/Dn):")
-                            layout.push_item_width(-1)
                             changed, new_angle_v = layout.slider_float(
-                                f"##look_angle_v_{i}", 
+                                f"Vertical (Up/Dn)##look_angle_v_{i}", 
                                 seg_data.get('look_angle_v', 0.0), 
                                 -90.0, 90.0
                             )
                             if changed:
                                 seg_data['look_angle_v'] = new_angle_v
                                 self._update_draw_state()
-                            layout.pop_item_width()
                             if layout.is_item_hovered():
                                 layout.set_tooltip("Negative = look down, Positive = look up")
                         
@@ -1301,6 +1277,8 @@ class LinearPathPanel(Panel):
                     
                     layout.unindent(15 * scale)
                     layout.spacing()
+                
+                layout.pop_id()
             
             # Add segment buttons
             layout.spacing()
@@ -1312,15 +1290,16 @@ class LinearPathPanel(Panel):
                 self._add_segment("orbit")
         
         layout.separator()
+        layout.pop_id()
         
         # === Path Settings Section ===
+        layout.push_id("path_settings")
         if layout.collapsing_header("Path Settings", default_open=True):
             btn_w = 45 * scale
             
             # Up Axis (camera level)
-            layout.label("Camera Up Axis:")
             up_axis_labels = [item[1] for item in self.UP_AXIS_ITEMS]
-            changed, self._up_axis_idx = layout.combo("##upaxis", self._up_axis_idx, up_axis_labels)
+            changed, self._up_axis_idx = layout.combo("Camera Up Axis##upaxis", self._up_axis_idx, up_axis_labels)
             if changed:
                 self._update_draw_state()
             if layout.is_item_hovered():
@@ -1329,21 +1308,9 @@ class LinearPathPanel(Panel):
             layout.spacing()
             
             # Elevation offset
-            axis_name = self.UP_AXIS_ITEMS[self._up_axis_idx][0].upper()
-            layout.label(f"Elevation (offset along {axis_name}):")
-            
-            layout.push_item_width(-80 * scale)
-            changed, self._elevation = layout.slider_float("##elev_slider", self._elevation, 0.0, 50.0)
+            changed, self._elevation = layout.slider_float("Elevation##elev_slider", self._elevation, 0.0, 50.0)
             if changed:
                 self._update_draw_state()
-            layout.pop_item_width()
-            layout.same_line()
-            layout.push_item_width(70 * scale)
-            changed, self._elevation = layout.input_float("##elev_input", self._elevation, 0.0, 0.0)
-            if changed:
-                self._elevation = max(0.0, self._elevation)
-                self._update_draw_state()
-            layout.pop_item_width()
             
             # Elevation adjustment buttons
             if layout.button("-0.5##elevsub05", (btn_w, 0)):
@@ -1372,17 +1339,7 @@ class LinearPathPanel(Panel):
             layout.spacing()
             
             # Speed (units per second)
-            layout.label("Speed (units/second):")
-            
-            layout.push_item_width(-80 * scale)
-            changed, self._speed = layout.slider_float("##speed_slider", self._speed, 0.1, 10.0)
-            layout.pop_item_width()
-            layout.same_line()
-            layout.push_item_width(70 * scale)
-            changed, self._speed = layout.input_float("##speed_input", self._speed, 0.0, 0.0)
-            if changed:
-                self._speed = max(0.01, self._speed)
-            layout.pop_item_width()
+            changed, self._speed = layout.slider_float("Speed##speed_slider", self._speed, 0.1, 10.0)
             
             # Speed adjustment buttons + Walking speed
             if layout.button("-0.1##spdsub01", (btn_w, 0)):
@@ -1421,18 +1378,17 @@ class LinearPathPanel(Panel):
             layout.spacing()
             
             # Smooth factor
-            layout.label("Smoothing:")
-            layout.push_item_width(-1)
-            changed, self._smooth_factor = layout.slider_float("##smooth", self._smooth_factor, 0.0, 1.0)
+            changed, self._smooth_factor = layout.slider_float("Smoothing##smooth", self._smooth_factor, 0.0, 1.0)
             if changed:
                 self._update_draw_state()
-            layout.pop_item_width()
             if layout.is_item_hovered():
                 layout.set_tooltip("0 = Sharp corners, 1 = Maximum smoothing at transitions")
         
         layout.separator()
+        layout.pop_id()
         
         # === Preview Section ===
+        layout.push_id("preview")
         if layout.collapsing_header("Preview", default_open=True):
             changed, self._show_preview = layout.checkbox("Show Path Preview##showpreview", self._show_preview)
             if changed:
@@ -1457,8 +1413,6 @@ class LinearPathPanel(Panel):
                 lf.ui.request_redraw()  # Keep updating progress
             else:
                 # Preview speed
-                layout.label("Preview Speed:")
-                layout.same_line()
                 speed_labels = ["0.5x", "1x", "2x", "4x"]
                 speed_values = [0.5, 1.0, 2.0, 4.0]
                 current_speed_idx = 1  # Default 1x
@@ -1467,11 +1421,9 @@ class LinearPathPanel(Panel):
                         current_speed_idx = idx
                         break
                 
-                layout.push_item_width(80 * scale)
-                changed, new_speed_idx = layout.combo("##previewspeed", current_speed_idx, speed_labels)
+                changed, new_speed_idx = layout.combo("Preview Speed##previewspeed", current_speed_idx, speed_labels)
                 if changed:
                     self._preview_speed = speed_values[new_speed_idx]
-                layout.pop_item_width()
                 
                 if can_preview:
                     if layout.button_styled("PREVIEW PATH##startpreview", "secondary", (-1, 32 * scale)):
@@ -1493,8 +1445,10 @@ class LinearPathPanel(Panel):
                 )
         
         layout.separator()
+        layout.pop_id()
         
         # === Recording Settings Section ===
+        layout.push_id("recording")
         if layout.collapsing_header("Recording Settings", default_open=True):
             # Resolution
             resolution_labels = [item[1] for item in self.RESOLUTION_ITEMS]
@@ -1516,13 +1470,12 @@ class LinearPathPanel(Panel):
             layout.spacing()
             
             # Output path
-            layout.label("Output Path:")
             if not self._output_path:
                 base_path = get_default_output_path()
                 self._output_path = base_path.replace("_360.mp4", "_linear.mp4")
             
             layout.push_item_width(-60 * scale)
-            changed, self._output_path = layout.input_text("##outpath", self._output_path)
+            changed, self._output_path = layout.input_text("Output Path##outpath", self._output_path)
             layout.pop_item_width()
             layout.same_line()
             if layout.button("...##browse", (50 * scale, 0)):
@@ -1552,16 +1505,17 @@ class LinearPathPanel(Panel):
                 )
         
         layout.separator()
+        layout.pop_id()
         
         # === Save/Load Track Section ===
+        layout.push_id("save_load")
         if layout.collapsing_header("Save/Load Track", default_open=False):
             # Track file path
             if not self._track_path:
                 self._track_path = self._get_default_track_path()
             
-            layout.label("Track File:")
             layout.push_item_width(-60 * scale)
-            changed, self._track_path = layout.input_text("##trackpath", self._track_path)
+            changed, self._track_path = layout.input_text("Track File##trackpath", self._track_path)
             layout.pop_item_width()
             layout.same_line()
             if layout.button("...##browsetrack", (50 * scale, 0)):
@@ -1606,8 +1560,10 @@ class LinearPathPanel(Panel):
                 layout.text_colored("Add segments to enable Save", theme.palette.text_dim)
         
         layout.separator()
+        layout.pop_id()
         
         # === Record Button ===
+        layout.push_id("record_section")
         if self._recording:
             # Show progress bar with status
             # progress_bar(fraction, overlay, width, height)
@@ -1632,3 +1588,4 @@ class LinearPathPanel(Panel):
             layout.spacing()
             color = (1.0, 0.4, 0.4, 1.0) if self._status_is_error else (0.4, 1.0, 0.4, 1.0)
             layout.text_colored(self._status_msg, color)
+        layout.pop_id()
