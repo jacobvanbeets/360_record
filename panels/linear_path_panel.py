@@ -9,7 +9,6 @@ from typing import Optional, List, Dict, Any
 
 import numpy as np
 import lichtfeld as lf
-from lfs_plugins.types import Panel
 
 from ..core.linear_path import LinearPath, LineSegment, OrbitSegment, compute_linear_camera_position
 from ..core.recorder import RecordingSettings, get_default_output_path, record_linear_video, record_linear_frames_to_folder
@@ -380,11 +379,12 @@ def _ensure_linear_draw_handler():
         _linear_draw_handler_registered = True
 
 
-class LinearPathPanel(Panel):
+class LinearPathPanel(lf.ui.Panel):
     """Panel for configuring and recording camera path videos (linear + orbit segments)."""
     
+    id = "360_record.linear_path_panel"
     label = "Camera Path"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 30
     
     RESOLUTION_ITEMS = [

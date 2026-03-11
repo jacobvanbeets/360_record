@@ -6,7 +6,6 @@ name = "360_record"
 version = "2.0.0"
 description = "Record camera path videos - mix linear and orbital segments in one path"
 author = "Jacob van Beets"
-min_lichtfeld_version = "0.5.0"
 
 dependencies = [
     "numpy",
@@ -16,3 +15,6 @@ dependencies = [
 [tool.lichtfeld]
 auto_start = true
 hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
